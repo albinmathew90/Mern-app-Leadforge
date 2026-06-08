@@ -17,7 +17,7 @@ import { useGoogleLogin } from '@react-oauth/google';
 
 const ACCENT = "#00C896";
 const ACCENT2 = "#0057FF";
-const API = "http://localhost:5001/api";
+const API = "http://4.240.108.250.nip.io/api";
 
 // ─── CSV EXPORT UTILITY ────────────────────────────────────────
 function downloadCSV(rows, columns, filename) {

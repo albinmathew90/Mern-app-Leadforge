@@ -2,7 +2,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
-import User from '../models/User.js';
+import User from '../models/user.js';
 
 const router = express.Router();
 
@@ -120,7 +120,7 @@ router.post('/forgot-password', async (req, res) => {
         user.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
         await user.save();
 
-        const resetUrl = `http://localhost:3000/?resetToken=${resetToken}`;
+        const resetUrl = `http://4.240.108.250.nip.io/?resetToken=${resetToken}`;
         
         const transporter = nodemailer.createTransport({
             host: process.env.SMTP_HOST || 'smtp.gmail.com',

@@ -1,4 +1,4 @@
-const BASE_API_URI = 'http://localhost:5001/api';
+const BASE_API_URI = 'http://4.240.108.250.nip.io/api';
 
 // Helper function to safely parse server responses without hitting unconfigured callbacks
 const handleResponse = async (response) => {

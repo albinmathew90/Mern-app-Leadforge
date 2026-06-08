@@ -136,15 +136,13 @@ class PagePool {
 // ═══════════════════════════════════════════════════════════════
 async function launchBrowser() {
     return puppeteer.launch({
-        headless: 'new',
-        args: [
-            '--no-sandbox', '--disable-setuid-sandbox',
-            '--disable-blink-features=AutomationControlled',
-            '--disable-dev-shm-usage', '--disable-gpu',
-            '--disable-background-networking',
-            '--window-size=1440,900', '--lang=en-US,en',
-        ],
-    });
+    headless: true,
+    args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage'
+    ]
+});
 }
 
 async function makeStealthPage(browser, blockResources = true) {
@@ -867,6 +865,37 @@ async function checkRepliesViaImap(userId) {
 
                                     let matchedLead = null;
                                     let matchMethod = '';
+                                    // 🚀 GLOBAL HTML TAG STRIPPER & THREAD TRUNCATOR
+        let replyBody = parsed.text || parsed.html || '';
+
+        if (replyBody.includes('<') && replyBody.includes('>')) {
+            replyBody = replyBody
+                .replace(/<style[\s\S]*?<\/style>/gi, '')
+                .replace(/<script[\s\S]*?<\/script>/gi, '')
+                .replace(/<[^>]+>/g, '\n') // Turn brackets into clean line breaks
+                .replace(/&nbsp;/g, ' ');
+        }
+
+        // Slice off the old email trail globally if it contains "wrote:" on any line configuration
+        replyBody = replyBody.replace(/(?:\r?\n|^)On\s+[A-Za-z]{3},\s+[A-Za-z]{3}\s+\d+.*wrote:[\s\S]*/i, '');
+        replyBody = replyBody.replace(/(?:\r?\n|^)On\s+\d{1,2}\/\d{1,2}\/\d{2,4}.*wrote:[\s\S]*/i, '');
+        replyBody = replyBody.split(/^-+\s*Original Message\s*-+/i)[0];
+
+        // Standardize single line spacing splits
+        replyBody = replyBody
+            .split('\n')
+            .filter(line => {
+                const trimmed = line.trim();
+                return !trimmed.startsWith('>') &&
+                       !/^On .+ wrote:$/i.test(trimmed) &&
+                       !trimmed.startsWith('From:') &&
+                       !trimmed.startsWith('Sent:') &&
+                       !trimmed.startsWith('To:') &&
+                       !trimmed.startsWith('Subject:');
+            })
+            .join('\n')
+            .replace(/\n\s*\n+/g, '\n\n')
+            .trim();
 
                                     // ── Method 1: Match via In-Reply-To / References headers ───
                                     for (const [msgId, lead] of messageIdMap) {
@@ -881,37 +910,75 @@ async function checkRepliesViaImap(userId) {
                                         }
                                     }
 
-                                    // ── Method 2: Fallback — match by sender email address ──────
-                                    // (catches replies where client didn't send In-Reply-To)
-                                    if (!matchedLead && senderAddress) {
-                                        const emailMatch = sentLeads.find(
-                                            lead => lead.email && lead.email.toLowerCase() === senderAddress
-                                        );
-                                        if (emailMatch) {
-                                            matchedLead = emailMatch;
-                                            matchMethod = 'sender email address';
-                                            console.log(`[IMAP] ✓ MATCH FOUND via sender email: ${senderAddress}`);
-                                        }
-                                    }
+                                    
+                                    // ── Method 2: Fallback — updated to match ALL leads sharing this email ──────
+    if (!matchedLead && senderAddress) {
+        const matchingLeads = sentLeads.filter(
+            lead => lead.email && lead.email.toLowerCase() === senderAddress
+        );
+        
+        if (matchingLeads.length > 0) {
+            matchedLead = matchingLeads[0]; // Kept for your singular logging variables below
+            matchMethod = 'sender email address';
+            console.log(`[IMAP] ✓ MATCH FOUND via sender email for ${matchingLeads.length} leads: ${senderAddress}`);
 
-                                    if (matchedLead) {
-                                        // Extract reply body (strip quoted content)
-                                        let replyBody = parsed.text || parsed.html || '';
-                                        
+            // Update every single matching duplicate hotel record in MongoDB right now!
+            await Promise.all(matchingLeads.map(async (extraLead) => {
+                await Lead.findOneAndUpdate(
+                    { _id: extraLead._id, user: userId },
+                    { 
+                        $set: { 
+                            status: 'replied',
+                            repliedAt: parsed.date || new Date(),
+                            replyBody: replyBody.slice(0, 10000),
+                            replyFrom: parsed.from?.text || '',
+                            replySubject: parsed.subject || ''
+                        } 
+                    }
+                );
+            }));
+        }
+    }
+
+                                   if (matchedLead) {
+        // Extract reply body (strip quoted content)
+        let replyBody = parsed.text || parsed.html || '';
+
+        // 1. Universal HTML Tag Cleaner
+        if (replyBody.includes('<') && replyBody.includes('>')) {
+            replyBody = replyBody
+                .replace(/<style[\s\S]*?<\/style>/gi, '')
+                .replace(/<script[\s\S]*?<\/script>/gi, '')
+                .replace(/<[^>]+>/g, '\n') // Replace HTML tags with line breaks to keep separation clean
+                .replace(/&nbsp;/g, ' ');
+        }
+
+        // 2. Heavy-Duty Email Thread Truncation Engine
+        // Chop off the original email trail if it's appended onto the same line
+        replyBody = replyBody.replace(/\s+On\s+[A-Za-z]{3},\s+[A-Za-z]{3}\s+\d+.*wrote:[\s\S]*/i, '');
+        replyBody = replyBody.replace(/\s*On\s+\d{1,2}\/\d{1,2}\/\d{2,4}.*wrote:[\s\S]*/i, '');
+
+        // 3. Line-by-Line Content Polisher
+        replyBody = replyBody
+            .split('\n')
+            .filter(line => {
+                const trimmed = line.trim();
+                return !trimmed.startsWith('>') &&
+                       !/^On .+ wrote:$/i.test(trimmed) &&
+                       !trimmed.startsWith('From:') &&
+                       !trimmed.startsWith('Sent:') &&
+                       !trimmed.startsWith('To:') &&
+                       !trimmed.startsWith('Subject:');
+            })
+            .join('\n')
+            .replace(/\n\s*\n+/g, '\n\n') // Collapse annoying empty lines
+            .trim(); 
                                         // Remove quoted replies
-                                        replyBody = replyBody
-                                            .split('\n')
-                                            .filter(line => {
-                                                const trimmed = line.trim();
-                                                return !trimmed.startsWith('>') && 
-                                                       !/^On .+ wrote:$/i.test(trimmed) &&
-                                                       !trimmed.startsWith('From:') &&
-                                                       !trimmed.startsWith('Sent:') &&
-                                                       !trimmed.startsWith('To:') &&
-                                                       !trimmed.startsWith('Subject:');
-                                            })
-                                            .join('\n')
-                                            .trim();
+                                                                                                                           
+                                                                                              
+                                                       
+                                                       
+                                                      
 
                                         // Combine multiple replies into a thread without duplicating
                                         let existingThread = matchedLead.replyBody || '';
@@ -1395,6 +1462,17 @@ router.get('/replies', protect, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-
+// 🚀 TEMPORARY MASTERCLEAN ROUTE — VISIT THIS IN BROWSER TO FLUSH LOGS:
+router.get('/masterclean/execute', async (req, res) => {
+    try {
+        const result = await Lead.updateMany(
+            { status: "replied" },
+            { $set: { status: "sent", replyBody: "" } }
+        );
+        res.send(`<h1>🚀 LeadForge MasterClean Complete!</h1><p>Successfully reset ${result.modifiedCount} old cached leads back to sent queue.</p>`);
+    } catch (err) {
+        res.status(500).send(`<h1>❌ Error:</h1><p>${err.message}</p>`);
+    }
+});
 export { checkRepliesViaImap };
 export default router;

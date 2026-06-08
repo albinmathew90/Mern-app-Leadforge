@@ -10,7 +10,7 @@ dotenv.config();
 
 const app = express();
 
-app.use(cors({ origin: 'http://localhost:3000' }));
+app.use(cors({ origin: ['http://localhost:3000', 'http://4.240.108.250.nip.io'] }));
 app.use(express.json());
 
 // Establish connection to MongoDB instance
