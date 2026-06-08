@@ -10,7 +10,12 @@ dotenv.config();
 
 const app = express();
 
-app.use(cors({ origin: ['http://localhost:3000', 'http://4.240.108.250.nip.io'] }));
+//  DYNAMIC CORS: Read origins from .env file, fallback to localhost if empty
+const allowedOrigins = process.env.ALLOWED_ORIGINS 
+  ? process.env.ALLOWED_ORIGINS.split(',') 
+  : ['http://localhost:3000'];
+
+app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
 
 // Establish connection to MongoDB instance
@@ -22,7 +27,6 @@ app.use('/api/leads', leadRoutes);
 
 // ═══════════════════════════════════════════════════════════════
 // AUTO REPLY CHECK SCHEDULER
-// Checks IMAP every 5 minutes for all users who have sent emails
 // ═══════════════════════════════════════════════════════════════
 const AUTO_CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
 
@@ -40,7 +44,6 @@ async function runAutoReplyCheck() {
     nextAutoCheckTime = new Date(Date.now() + AUTO_CHECK_INTERVAL_MS);
 
     try {
-        // Find all unique user IDs that have sent emails with messageIds
         const usersWithSentEmails = await Lead.distinct('user', {
             status: { $in: ['sent', 'replied'] },
             messageId: { $exists: true, $ne: '' },
@@ -85,11 +88,11 @@ app.get('/api/leads/auto-check-status', (req, res) => {
 
 // Start the scheduler after a short delay (let DB connect first)
 setTimeout(() => {
-    console.log('[AutoCheck] 🟢 Auto reply checker started — interval: 5 minutes');
-    runAutoReplyCheck(); // run once immediately on startup
+    // Modified log string to dynamically match your real interval variable
+    console.log(`[AutoCheck] 🟢 Auto reply checker started — interval: ${AUTO_CHECK_INTERVAL_MS / 60000} minutes`);
+    runAutoReplyCheck(); 
     setInterval(runAutoReplyCheck, AUTO_CHECK_INTERVAL_MS);
 }, 5000);
 
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => console.log(`🚀 Automated Lead Server operational on port ${PORT}`));
-// triggered restart

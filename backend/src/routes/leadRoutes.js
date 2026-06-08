@@ -12,34 +12,85 @@ import { simpleParser } from 'mailparser';
 import puppeteer from 'puppeteer';
 import nodemailer from 'nodemailer';
 import Lead from '../models/Lead.js';
+import jwt from 'jsonwebtoken';
 import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// ═══════════════════════════════════════════════════════════════
-// SSE PROGRESS
-// ═══════════════════════════════════════════════════════════════
-let currentProgress = { status: 'idle', percent: 0, message: '' };
-const sseClients = new Set();
+// ═══════════════════════════════════════════════
+// SSE PROGRESS  —  per-session isolated state
+// ═══════════════════════════════════════════════
+// Each active scrape session gets its own progress object and SSE client set.
+// This ensures User A’s real-time logs are never broadcast to User B.
+const progressBySession = new Map(); // sessionId → { status, percent, message }
+const clientsBySession  = new Map(); // sessionId → Set<res>
 
-function broadcastProgress(update) {
-    Object.assign(currentProgress, update);
-    const payload = `data: ${JSON.stringify(currentProgress)}\n\n`;
-    for (const client of sseClients) {
-        try { client.write(payload); } catch { sseClients.delete(client); }
+function getSessionProgress(sessionId) {
+    if (!progressBySession.has(sessionId)) {
+        progressBySession.set(sessionId, { status: 'idle', percent: 0, message: '' });
+    }
+    return progressBySession.get(sessionId);
+}
+
+function broadcastProgress(sessionId, update) {
+    const prog = getSessionProgress(sessionId);
+    Object.assign(prog, update);
+    const payload = `data: ${JSON.stringify(prog)}\n\n`;
+    const clients = clientsBySession.get(sessionId);
+    if (!clients) return;
+    for (const client of clients) {
+        try { client.write(payload); } catch { clients.delete(client); }
     }
 }
 
-router.get('/status', (_req, res) => res.json(currentProgress));
+// Public status poll — returns only THIS session’s progress
+router.get('/status', (req, res) => {
+    // Token is already verified by the protect middleware if applied,
+    // but this route is intentionally public so the frontend can poll
+    // before the session is fully established. We decode manually.
+    try {
+        const token = (req.headers.authorization || '').split(' ')[1];
+        const decoded = token ? jwt.verify(token, process.env.JWT_SECRET || 'fallbacksecret123') : null;
+        const sessionId = decoded?.sessionId;
+        if (sessionId) {
+            return res.json(getSessionProgress(sessionId));
+        }
+    } catch { /* invalid token — fall through to legacy response */ }
+    res.json({ status: 'idle', percent: 0, message: '' });
+});
 
 router.get('/status/stream', (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
-    res.write(`data: ${JSON.stringify(currentProgress)}\n\n`);
-    sseClients.add(res);
-    req.on('close', () => sseClients.delete(res));
+
+    // Decode the session from the token passed as a query-param
+    // (EventSource API doesn’t support custom headers, so we read ?token=)
+    try {
+        const token = req.query.token || (req.headers.authorization || '').split(' ')[1];
+        const decoded = token ? jwt.verify(token, process.env.JWT_SECRET || 'fallbacksecret123') : null;
+        const sessionId = decoded?.sessionId;
+
+        if (sessionId) {
+            if (!clientsBySession.has(sessionId)) clientsBySession.set(sessionId, new Set());
+            const clients = clientsBySession.get(sessionId);
+            clients.add(res);
+
+            // Send the current state immediately on connect
+            res.write(`data: ${JSON.stringify(getSessionProgress(sessionId))}\n\n`);
+
+            req.on('close', () => {
+                clients.delete(res);
+                if (clients.size === 0) clientsBySession.delete(sessionId);
+            });
+            return;
+        }
+    } catch { /* invalid token */ }
+
+    // Fallback: send idle state and close
+    res.write(`data: ${JSON.stringify({ status: 'idle', percent: 0, message: '' })}\n\n`);
+    res.end();
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -160,9 +211,16 @@ async function makeStealthPage(browser, blockResources = true) {
     });
     if (blockResources) {
         await page.setRequestInterception(true);
-        page.on('request', req => {
-            if (['image', 'media', 'font'].includes(req.resourceType())) req.abort();
-            else req.continue();
+        // ── Fix: Restore Stylesheets for Maps Infinite Scroll ──────────────────
+        // Blocking images, media, and fonts saves bandwidth, but blocking
+        // stylesheets breaks Google Maps' flexbox/overflow container layouts.
+        // If the CSS isn't loaded, the `scrollTop` injection in aggressiveScroll
+        // silently fails because the container has no bounded height, meaning
+        // the next batch of 20 results never triggers.
+        const BLOCKED_TYPES = new Set(['image', 'media', 'font']);
+        page.on('request', intercepted => {
+            if (BLOCKED_TYPES.has(intercepted.resourceType())) intercepted.abort();
+            else intercepted.continue();
         });
     }
     return page;
@@ -171,8 +229,17 @@ async function makeStealthPage(browser, blockResources = true) {
 // ═══════════════════════════════════════════════════════════════
 // GOOGLE MAPS SCRAPING
 // ═══════════════════════════════════════════════════════════════
-async function scrapeMapCards(keyword, city, cancelToken = { cancelled: false }) {
+async function scrapeMapCards(keyword, city, cancelToken = { cancelled: false }, sessionId = null, browserRegistry = null) {
     const browser = await launchBrowser();
+
+    // ── Fix 1: Register the Maps browser so cancel can force-close it ─────
+    // Previously this browser was invisible to the cancel handler. Now it's
+    // tracked under the 'mapBrowser' key alongside detailBrowser/emailBrowser.
+    if (browserRegistry && sessionId) {
+        const existing = browserRegistry.get(sessionId) || {};
+        browserRegistry.set(sessionId, { ...existing, mapBrowser: browser });
+    }
+
     const page = await makeStealthPage(browser);
     const allCards = new Map();
 
@@ -185,12 +252,12 @@ async function scrapeMapCards(keyword, city, cancelToken = { cancelled: false })
 
         for (const queryText of queries) {
             if (cancelToken.cancelled) break;
-            broadcastProgress({ message: `Searching: "${queryText}"…` });
-            const q = encodeURIComponent(queryText);
+            broadcastProgress(sessionId, { message: `Searching: "${queryText}"…` });
+            const q = encodeURIComponent(queryText)
 
             try {
                 await page.goto(`https://www.google.com/maps/search/${q}?hl=en`, {
-                    waitUntil: 'networkidle2', timeout: 35000,
+                    waitUntil: 'networkidle2', timeout: 10000,
                 });
                 await jitter(2500, 4000);
 
@@ -210,7 +277,7 @@ async function scrapeMapCards(keyword, city, cancelToken = { cancelled: false })
 
                 if (!feedFound) continue;
 
-                await aggressiveScroll(page, allCards, keyword, cancelToken);
+                await aggressiveScroll(page, allCards, keyword, cancelToken, sessionId);
 
             } catch (err) {
                 console.log(`[maps] Query failed "${queryText}": ${err.message}`);
@@ -222,16 +289,27 @@ async function scrapeMapCards(keyword, city, cancelToken = { cancelled: false })
 
         console.log(`[maps] Total unique cards: ${allCards.size}`);
         await browser.close();
+
+        // Deregister the map browser now that it has cleanly closed
+        if (browserRegistry && sessionId) {
+            const existing = browserRegistry.get(sessionId) || {};
+            browserRegistry.set(sessionId, { ...existing, mapBrowser: null });
+        }
+
         return [...allCards.values()];
 
     } catch (err) {
         console.error('[scrapeMapCards]', err.message);
         await browser.close().catch(() => { });
+        if (browserRegistry && sessionId) {
+            const existing = browserRegistry.get(sessionId) || {};
+            browserRegistry.set(sessionId, { ...existing, mapBrowser: null });
+        }
         return [...allCards.values()];
     }
 }
 
-async function aggressiveScroll(page, allCards, keyword) {
+async function aggressiveScroll(page, allCards, keyword, cancelToken, sessionId = null) {
     let staleRounds = 0;
     let lastCount = 0;
     let totalScrolls = 0;
@@ -239,7 +317,7 @@ async function aggressiveScroll(page, allCards, keyword) {
     const MAX_STALE = 8;
 
     while (staleRounds < MAX_STALE && totalScrolls < MAX_SCROLLS) {
-        if (arguments[3] && arguments[3].cancelled) break; // If cancelToken passed
+        if (cancelToken && cancelToken.cancelled) break;
         const newCards = await extractCardsFromPage(page);
         let addedThisRound = 0;
 
@@ -251,7 +329,7 @@ async function aggressiveScroll(page, allCards, keyword) {
         }
 
         const currentCount = allCards.size;
-        broadcastProgress({
+        broadcastProgress(sessionId, {
             message: `Scrolling… found ${currentCount} listings so far`,
             percent: Math.min(30, 5 + currentCount / 3),
         });
@@ -729,6 +807,13 @@ async function sendTelegramAlert(message) {
     }
 }
 
+// ── Global registry to track IMAP UIDs and prevent duplicate Telegrams ─────
+// By tracking the UIDs in memory, the cron job only parses TRULY new emails
+// that arrived since the last 2-minute cycle, rather than re-parsing every 
+// email in the 30-day window. This fixes the repeating Telegram bug and 
+// saves massive CPU cycles.
+const processedImapUids = new Set();
+
 async function checkRepliesViaImap(userId) {
     const sentLeads = await Lead.find({
         user: userId,
@@ -792,7 +877,7 @@ async function checkRepliesViaImap(userId) {
                 const since = new Date();
                 since.setDate(since.getDate() - 30);
 
-                // Search for UNSEEN or recent emails
+                // Search for recent emails
                 imap.search([['SINCE', since]], (err, uids) => {
                     if (err) {
                         console.error('[IMAP] Search error:', err.message);
@@ -806,9 +891,21 @@ async function checkRepliesViaImap(userId) {
                         return resolve({ checked: sentLeads.length, newReplies: 0 });
                     }
 
-                    console.log(`[IMAP] Found ${uids.length} emails to check`);
+                    // ── Bug Fix: Filter out UIDs we've already parsed ────────
+                    const newUids = uids.filter(uid => !processedImapUids.has(uid));
+                    
+                    if (!newUids.length) {
+                        console.log(`[IMAP] ${uids.length} emails found, but 0 are new since last check.`);
+                        imap.end();
+                        return resolve({ checked: sentLeads.length, newReplies: 0 });
+                    }
 
-                    const fetch = imap.fetch(uids, { 
+                    // Add the new ones to the Set so they aren't parsed next time
+                    newUids.forEach(uid => processedImapUids.add(uid));
+
+                    console.log(`[IMAP] Found ${newUids.length} NEW emails to check (out of ${uids.length} total)`);
+
+                    const fetch = imap.fetch(newUids, { 
                         bodies: '', // fetch entire email
                         struct: true 
                     });
@@ -1102,11 +1199,49 @@ router.get('/:id/conversation', protect, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // MAIN SEARCH ENDPOINT
 // ═══════════════════════════════════════════════════════════════
-export const activeScrapeTokens = new Map();
+// ── Per-session browser + cancel-token registries ─────────────────────────
+// Keyed by sessionId (not userId) so that two browsers logged in as the same
+// user each get their own isolated slot — fixing the global Stop Scan bug.
+export const activeScrapeTokens = new Map(); // sessionId → { cancelled: bool }
+const activeScrapeBrowsers = new Map(); // sessionId → { mapBrowser, detailBrowser, emailBrowser }
 
-router.post('/cancel-search', protect, (req, res) => {
-    const token = activeScrapeTokens.get(req.user.id);
+// ── Global server-wide concurrency cap ───────────────────────────────────────
+// Each scrape run opens 3 Chromium instances (~300–500 MB RAM each).
+//
+// Instance sizing guide:
+//   2 GB  → MAX = 2
+//   4 GB  → MAX = 3
+//   8 GB  → MAX = 5   ← current (Azure 8 GB)
+//   16 GB → MAX = 10
+//
+// Formula: floor((totalRAM_GB - 2.5) / 1.1)
+// The 2.5 GB headroom covers OS + Node.js + MongoDB + swap.
+const MAX_CONCURRENT_SCRAPES = 5;
+
+router.post('/cancel-search', protect, async (req, res) => {
+    const sessionId = req.user.currentSessionId;
+
+    // ── Fix 1: Set the cancel flag (tells the loop to stop cleanly) ────────
+    const token = activeScrapeTokens.get(sessionId);
     if (token) token.cancelled = true;
+
+    // ── Fix 1: Force-close ALL three browsers for this session immediately ─
+    // Previously only the flag was set. Now we aggressively terminate every
+    // Chromium process (map scraper + detail fetcher + email crawler) so the
+    // user doesn't have to wait for the current batch to naturally finish.
+    const browsers = activeScrapeBrowsers.get(sessionId);
+    if (browsers) {
+        const { mapBrowser, detailBrowser, emailBrowser } = browsers;
+        await Promise.allSettled([
+            mapBrowser    ? mapBrowser.close()    : Promise.resolve(),
+            detailBrowser ? detailBrowser.close() : Promise.resolve(),
+            emailBrowser  ? emailBrowser.close()  : Promise.resolve(),
+        ]);
+        activeScrapeBrowsers.delete(sessionId);
+    }
+    activeScrapeTokens.delete(sessionId);
+
+    broadcastProgress(sessionId, { status: 'idle', percent: 0, message: 'Scan stopped.' });
     res.json({ success: true });
 });
 
@@ -1115,24 +1250,60 @@ router.post('/search', protect, async (req, res) => {
     if (!keyword?.trim() || !city?.trim())
         return res.status(400).json({ error: 'keyword and city are required' });
 
+    // ── Isolate this scrape run to the verified session ID ─────────────────
+    const sessionId = req.user.currentSessionId;
+
+    // ── Fix 2: Per-session duplicate guard ─────────────────────────────────
+    // Prevents the same browser tab (or two tabs with the same session) from
+    // firing a second /search while one is already running. Without this, each
+    // click spawns 3 new Chromium instances on top of the existing ones.
+    if (activeScrapeTokens.has(sessionId)) {
+        return res.status(409).json({
+            error: 'A scan is already running for this session. Stop the current scan before starting a new one.'
+        });
+    }
+
+    // ── Global server concurrency cap ──────────────────────────────────
+    // Each scrape run = 3 Chromium processes. Cap concurrent runs to protect RAM.
+    if (activeScrapeTokens.size >= MAX_CONCURRENT_SCRAPES) {
+        return res.status(503).json({
+            error: `The server is at full capacity (${activeScrapeTokens.size} active scans). Please try again after some time.`
+        });
+    }
+
     const cancelToken = { cancelled: false };
-    activeScrapeTokens.set(req.user.id, cancelToken);
+    activeScrapeTokens.set(sessionId, cancelToken);
 
-    let detailBrowser, emailBrowser;
+    // ── Local duplicate-name HashSet (O(1) lookups) ────────────────────────
+    // Initialized fresh per request — zero cross-request state pollution.
+    const seenNames = new Set();
+
+    let detailBrowser = null;
+    let emailBrowser  = null;
+
+    // ── Fix 1: Register all three browser slots (mapBrowser added) ─────────
+    // The cancel handler reads this Map to force-close every Chromium process.
+    activeScrapeBrowsers.set(sessionId, { mapBrowser: null, detailBrowser: null, emailBrowser: null });
+
     try {
-        broadcastProgress({ status: 'searching', percent: 3, message: 'Starting scrape…' });
+        broadcastProgress(sessionId, { status: 'searching', percent: 3, message: 'Starting scrape…' });
 
-        const cards = await scrapeMapCards(keyword.trim(), city.trim(), cancelToken);
+        const cards = await scrapeMapCards(keyword.trim(), city.trim(), cancelToken, sessionId, activeScrapeBrowsers);
 
         if (!cards.length || cancelToken.cancelled) {
-            broadcastProgress({ status: 'idle', percent: 100, message: cancelToken.cancelled ? 'Scan cancelled by user.' : 'No listings found.' });
+            broadcastProgress(sessionId, { status: 'idle', percent: 100, message: cancelToken.cancelled ? 'Scan cancelled by user.' : 'No listings found.' });
+            activeScrapeTokens.delete(sessionId);
+            activeScrapeBrowsers.delete(sessionId);
             return res.json({ success: true, cancelled: cancelToken.cancelled, totalLeads: 0, data: [] });
         }
 
-        broadcastProgress({ status: 'details', percent: 32, message: `Fetching details for ${cards.length} listings…` });
+        broadcastProgress(sessionId, { status: 'details', percent: 32, message: `Fetching details for ${cards.length} listings…` });
 
         const DETAIL_POOL_SIZE = 6;
         detailBrowser = await launchBrowser();
+        // Track the browser handle so cancel can close it externally
+        activeScrapeBrowsers.set(sessionId, { detailBrowser, emailBrowser: null });
+
         const detailPool = new PagePool(detailBrowser, DETAIL_POOL_SIZE);
         await detailPool.init();
 
@@ -1141,14 +1312,14 @@ router.post('/search', protect, async (req, res) => {
 
         for (let i = 0; i < relevantCards.length; i += 6) {
             if (cancelToken.cancelled) {
-                broadcastProgress({ status: 'idle', percent: 100, message: 'Scan cancelled by user.' });
+                broadcastProgress(sessionId, { status: 'idle', percent: 100, message: 'Scan cancelled by user.' });
                 break;
             }
             const batch = relevantCards.slice(i, i + 6);
             await Promise.all(batch.map(async card => {
                 await fetchMapsDetail(card, detailPool);
                 detailDone++;
-                broadcastProgress({
+                broadcastProgress(sessionId, {
                     percent: 32 + Math.floor((detailDone / relevantCards.length) * 28),
                     message: `Details: ${detailDone}/${relevantCards.length} — ${card.name}`,
                 });
@@ -1158,15 +1329,21 @@ router.post('/search', protect, async (req, res) => {
         await detailPool.drain();
         await detailBrowser.close();
         detailBrowser = null;
+        activeScrapeBrowsers.set(sessionId, { detailBrowser: null, emailBrowser: null });
 
         if (cancelToken.cancelled) {
+            activeScrapeTokens.delete(sessionId);
+            activeScrapeBrowsers.delete(sessionId);
             return res.json({ success: true, cancelled: true, totalLeads: 0, data: [] });
         }
 
-        broadcastProgress({ status: 'emails', percent: 60, message: `Deep-scanning websites for emails…` });
+        broadcastProgress(sessionId, { status: 'emails', percent: 60, message: `Deep-scanning websites for emails…` });
 
         emailBrowser = await launchBrowser();
-        const emailPool = new PagePool(emailBrowser, 4);
+        // Track email browser handle
+        activeScrapeBrowsers.set(sessionId, { detailBrowser: null, emailBrowser });
+
+        const emailPool = new PagePool(emailBrowser, 2);
         await emailPool.init();
 
         const savedLeads = [];
@@ -1179,13 +1356,21 @@ router.post('/search', protect, async (req, res) => {
                 const card = queue.shift();
                 if (!card) break;
 
+                // ── O(1) local duplicate check ─────────────────────────────
+                // seenNames is a fresh Set per /search call — no stale state.
+                if (seenNames.has(card.name)) {
+                    emailDone++;
+                    continue;
+                }
+                seenNames.add(card.name);
+
                 let email = null;
                 if (isUsableUrl(card.website)) {
                     email = await findEmailForWebsite(card.website, emailPool);
                 }
 
                 emailDone++;
-                broadcastProgress({
+                broadcastProgress(sessionId, {
                     percent: 60 + Math.floor((emailDone / cards.length) * 35),
                     message: `[${emailDone}/${cards.length}] ${card.name} → ${email || 'no email'}`,
                 });
@@ -1220,16 +1405,21 @@ router.post('/search', protect, async (req, res) => {
         await emailBrowser.close();
         emailBrowser = null;
 
+        activeScrapeTokens.delete(sessionId);
+        activeScrapeBrowsers.delete(sessionId);
+
         const withEmail = savedLeads.filter(l => l.email);
-        broadcastProgress({ status: 'idle', percent: 100, message: `Done! ${savedLeads.length} leads (${withEmail.length} with email)` });
+        broadcastProgress(sessionId, { status: 'idle', percent: 100, message: `Done! ${savedLeads.length} leads (${withEmail.length} with email)` });
 
         return res.json({ success: true, cancelled: cancelToken.cancelled, totalLeads: savedLeads.length, data: savedLeads });
 
     } catch (err) {
         console.error('[/search error]', err);
         if (detailBrowser) await detailBrowser.close().catch(() => { });
-        if (emailBrowser) await emailBrowser.close().catch(() => { });
-        broadcastProgress({ status: 'error', percent: 0, message: err.message });
+        if (emailBrowser)  await emailBrowser.close().catch(() => { });
+        activeScrapeTokens.delete(sessionId);
+        activeScrapeBrowsers.delete(sessionId);
+        broadcastProgress(sessionId, { status: 'error', percent: 0, message: err.message });
         return res.status(500).json({ error: err.message });
     }
 });

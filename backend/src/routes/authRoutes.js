@@ -6,8 +6,8 @@ import User from '../models/user.js';
 
 const router = express.Router();
 
-const generateToken = (id) => {
-    return jwt.sign({ id }, process.env.JWT_SECRET || 'fallbacksecret123', { expiresIn: '7d' });
+const generateToken = (id, sessionId) => {
+    return jwt.sign({ id, sessionId }, process.env.JWT_SECRET || 'fallbacksecret123', { expiresIn: '7d' });
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -28,10 +28,15 @@ router.post('/register', async (req, res) => {
         }
 
         const user = await User.create({ name, email, password });
-        
+
+        // Generate a session ID for this new registration
+        const sessionId = crypto.randomUUID();
+        user.currentSessionId = sessionId;
+        await user.save({ validateBeforeSave: false });
+
         return res.status(201).json({
             success: true,
-            token: generateToken(user._id),
+            token: generateToken(user._id, sessionId),
             user: { id: user._id, name: user.name, email: user.email }
         });
     } catch (err) {
@@ -59,9 +64,14 @@ router.post('/login', async (req, res) => {
             return res.status(401).json({ success: false, error: 'Invalid email credentials or password' });
         }
 
+        // Generate a new session ID — this invalidates any previous active session
+        const sessionId = crypto.randomUUID();
+        user.currentSessionId = sessionId;
+        await user.save({ validateBeforeSave: false });
+
         return res.json({
             success: true,
-            token: generateToken(user._id),
+            token: generateToken(user._id, sessionId),
             user: { id: user._id, name: user.name, email: user.email }
         });
     } catch (err) {
@@ -90,16 +100,20 @@ router.post('/google', async (req, res) => {
             // Update googleId if they already have an account but haven't linked Google
             if (!user.googleId) {
                 user.googleId = googleId;
-                await user.save();
             }
         } else {
             // Create a new user without a password
             user = await User.create({ name, email, googleId });
         }
 
+        // Generate a new session ID — this invalidates any previous active session
+        const sessionId = crypto.randomUUID();
+        user.currentSessionId = sessionId;
+        await user.save({ validateBeforeSave: false });
+
         return res.json({
             success: true,
-            token: generateToken(user._id),
+            token: generateToken(user._id, sessionId),
             user: { id: user._id, name: user.name, email: user.email }
         });
 
@@ -120,8 +134,10 @@ router.post('/forgot-password', async (req, res) => {
         user.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
         await user.save();
 
-        const resetUrl = `http://4.240.108.250.nip.io/?resetToken=${resetToken}`;
-        
+        //  NEW WAY (Reads frontend URL from your .env file)
+        const clientUrl = process.env.APP_FRONTEND_URL || 'http://localhost:3000';
+        const resetUrl = `${clientUrl}/?resetToken=${resetToken}`;
+
         const transporter = nodemailer.createTransport({
             host: process.env.SMTP_HOST || 'smtp.gmail.com',
             port: process.env.SMTP_PORT || 465,

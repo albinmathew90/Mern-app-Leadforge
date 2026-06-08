@@ -1,4 +1,4 @@
-const BASE_API_URI = 'http://4.240.108.250.nip.io/api';
+const BASE_API_URI = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
 
 // Helper function to safely parse server responses without hitting unconfigured callbacks
 const handleResponse = async (response) => {
@@ -8,13 +8,24 @@ const handleResponse = async (response) => {
     } else {
         // If the server fails (500), this will extract the text or JSON error directly
         let errorMsg = "Unknown Error";
+        let errorCode = null;
         try {
             const errJson = await response.json();
             errorMsg = errJson.error || JSON.stringify(errJson);
+            errorCode = errJson.error; // capture the error code string
         } catch {
             errorMsg = await response.text();
         }
-        return { success: false, error: errorMsg };
+
+        // ── Global Session Eviction Handler ──────────────────────────────
+        // If the middleware sent SESSION_EVICTED, clear creds and broadcast
+        // the event so the UI can show the lockout popup wherever it lives.
+        if (response.status === 401 && errorCode === 'SESSION_EVICTED') {
+            localStorage.removeItem('userSessionToken');
+            window.dispatchEvent(new CustomEvent('session-evicted'));
+        }
+
+        return { success: false, error: errorMsg, errorCode };
     }
 };
 

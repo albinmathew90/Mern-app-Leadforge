@@ -14,10 +14,22 @@ export const protect = async (req, res, next) => {
 
             // Find the active account profile and pass it along the request pipeline
             req.user = await User.findById(decoded.id).select('-password');
-            
+
             if (!req.user) {
                 return res.status(401).json({ success: false, error: 'User account no longer exists' });
             }
+
+            // ─── Concurrent Session Eviction (Option B) ───────────────────────
+            // Compare the sessionId baked into this token against the one stored
+            // in the DB. If they differ, a newer login has taken over — evict.
+            if (req.user.currentSessionId && decoded.sessionId !== req.user.currentSessionId) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'SESSION_EVICTED',
+                    message: 'Your session was ended because someone logged into this account from another location.'
+                });
+            }
+            // ──────────────────────────────────────────────────────────────────
 
             return next(); // Pass verification smoothly
         } catch (error) {

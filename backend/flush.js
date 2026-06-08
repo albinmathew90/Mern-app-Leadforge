@@ -1,7 +1,9 @@
 import mongoose from 'mongoose';
+import dotenv from 'dotenv';
+dotenv.config();
 
-// Your explicit cluster connection target path
-const uri = "mongodb+srv://rncluster90.3kcjcvb.mongodb.net/leadGeneratorDB?retryWrites=true&w=majority";
+// Load connection string from environment variables
+const uri = process.env.MONGODB_URI;
 
 async function run() {
     try {

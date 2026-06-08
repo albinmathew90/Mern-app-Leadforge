@@ -14,10 +14,11 @@ import {
 } from "./api";
 import { loadRepliesAPI } from "./api";
 import { useGoogleLogin } from '@react-oauth/google';
+import Swal from 'sweetalert2';
 
 const ACCENT = "#00C896";
 const ACCENT2 = "#0057FF";
-const API = "http://4.240.108.250.nip.io/api";
+const API = process.env.REACT_APP_API_URL || "http://127.0.0.1:5001/api";
 
 // ─── CSV EXPORT UTILITY ────────────────────────────────────────
 function downloadCSV(rows, columns, filename) {
@@ -370,17 +371,29 @@ function Sidebar({ page, setPage, user, onLogout, repliesCount }) {
     );
 }
 
-// ─── SSE PROGRESS BAR ─────────────────────────────────────────
-// Connects to /api/leads/status/stream and shows live scraper progress
+// ── Shared SweetAlert2 Toast preset ───────────────────────────────
+const Toast = Swal.mixin({
+    toast: true,
+    position: 'top-end',
+    showConfirmButton: false,
+    timer: 4000,
+    timerProgressBar: true,
+    background: '#1a1a1f',
+    color: '#e5e5e7',
+    iconColor: '#00C896',
+    didOpen: (toast) => {
+        toast.addEventListener('mouseenter', Swal.stopTimer);
+        toast.addEventListener('mouseleave', Swal.resumeTimer);
+    }
+});
+
+// ── SSE Progress Bar ────────────────────────────────────────────
 function SseProgressBar({ active }) {
     const [progress, setProgress] = useState({ percent: 0, message: "" });
-    const esRef = useRef(null);
 
     useEffect(() => {
         if (!active) { setProgress({ percent: 0, message: "" }); return; }
         const token = localStorage.getItem("userSessionToken");
-        // SSE doesn't support headers natively in EventSource,
-        // so we poll the /status endpoint every second while scanning
         const poll = setInterval(async () => {
             try {
                 const r = await fetch(`${API}/leads/status`, {
@@ -414,7 +427,7 @@ function SseProgressBar({ active }) {
     );
 }
 
-// ─── HOME DASHBOARD PAGE ───────────────────────────────────────
+// ─── HOME DASHBOARD PAGE ───────────────────────────────────────────
 function HomeDashboard() {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -569,6 +582,64 @@ function ScraperPage() {
     const [showCompose, setShowCompose] = useState(false);
     const [emailSubject, setEmailSubject] = useState("Partnership opportunity with {name}");
     
+    async function scan() {
+        if (!keyword || !city) return;
+        setScanning(true); setLeads([]); setSelected([]); setError(""); setMsg("");
+
+        let res = null;
+        try {
+            res = await startLeadScraperAPI(keyword, city);
+        } catch (networkErr) {
+            // Network-level failure (connection reset, proxy timeout on Azure, etc.)
+            // The backend may have completed successfully — always try the DB re-fetch.
+            console.warn('[scan] Network error, attempting DB re-fetch:', networkErr.message);
+        }
+
+        setScanning(false);
+
+        // ── Handle concurrency guard errors (these are fast rejections, no DB data) ──
+        if (res && !res.success) {
+            if ((res.error || '').includes('already running')) {
+                Toast.fire({ icon: 'warning', title: 'Scan already running', text: 'Press "Stop Scan" before starting a new search.' });
+                return;
+            }
+            if ((res.error || '').includes('full capacity') || (res.error || '').includes('active scans')) {
+                Toast.fire({ icon: 'info', title: '🚦 Server at capacity', text: 'All scan slots are in use right now. Please try again after some time.', timer: 8000, timerProgressBar: true });
+                return;
+            }
+            if ((res.error || '').includes('keyword and city')) {
+                setError(res.error);
+                return;
+            }
+        }
+
+        // ── Always re-fetch from DB after the scrape ─────────────────────────────
+        // Reason 1: res.data contains raw Mongoose docs whose status may already be
+        //           "sent"/"replied" — filtering them to "unsent" silently drops them.
+        // Reason 2: On Azure, long-running HTTP responses (3–5 min) are often
+        //           truncated by load balancers/proxies, arriving as null/empty.
+        //           Re-fetching from DB is always authoritative regardless of what
+        //           the scan response body contained.
+        try {
+            const fresh = await loadDashboardLeadsAPI();
+            const freshLeads = Array.isArray(fresh?.data)
+                ? fresh.data.filter(l => l.email && l.website && l.status === "unsent")
+                : [];
+            setLeads(freshLeads);
+
+            if (res?.cancelled) {
+                Toast.fire({ icon: 'info', title: 'Scan stopped', text: `${freshLeads.length} leads saved so far.` });
+            } else if (freshLeads.length === 0) {
+                setError("No new leads found. Try a different keyword or city.");
+            } else {
+                Toast.fire({ icon: 'success', title: '✅ Scan complete!', text: `${freshLeads.length} ready-to-email lead(s) found.` });
+            }
+        } catch (fetchErr) {
+            // Even the re-fetch failed — genuine connectivity problem
+            setError("Scan completed but couldn't load results. Please refresh the page.");
+        }
+    }
+    
     const defaultBody = `Hi {name} team,\n\nI noticed you are a prominent business in the {category} space.\n\nWe specialize in helping businesses like yours scale and acquire more customers through targeted digital strategies. I'd love to share a few quick ideas on how we can collaborate and drive more growth for your business.\n\nAre you open to a brief 10-minute chat next week?\n\nThank you`;
     
     const [emailBody, setEmailBody] = useState(defaultBody);
@@ -583,30 +654,16 @@ function ScraperPage() {
         }).catch(() => { });
     }, []);
 
-    async function scan() {
-        if (!keyword || !city) return;
-        setScanning(true); setLeads([]); setSelected([]); setError(""); setMsg("");
-        // backend returns { success, totalLeads, data }
-        const res = await startLeadScraperAPI(keyword, city);
-        setScanning(false);
-        if (res?.success && Array.isArray(res.data)) {
-            setLeads(res.data.filter(l => l.email && l.website && l.status === "unsent"));
-            if (res.cancelled) {
-                setMsg("Scan stopped successfully.");
-            } else if (res.data.length === 0) {
-                setError("No leads found. Try a different keyword or city.");
-            }
-        } else {
-            setError(res?.error || "Scrape failed. Check your backend logs.");
-        }
-    }
 
     async function stopScan() {
         try {
             await cancelLeadScraperAPI();
-            setMsg("Cancellation signal sent. Stopping soon...");
+            // Cancel now force-closes all 3 Chromium browsers immediately
+            Toast.fire({ icon: 'success', title: 'Scan stopped', text: 'All browser processes have been terminated.' });
+            setScanning(false);
         } catch (e) {
             console.error("Failed to cancel", e);
+            Toast.fire({ icon: 'error', title: 'Could not stop scan', text: e.message });
         }
     }
 
@@ -628,7 +685,8 @@ function ScraperPage() {
         const res = await sendEmailBlastAPI(selected, emailSubject, emailBody);
         setBlasting(false);
         if (res?.success) {
-            setMsg(`Emails dispatched to ${selected.length} lead(s) successfully!`);
+            // ── SweetAlert2 Toast: replaces plain setMsg text ────────────
+            Toast.fire({ icon: 'success', title: `🚀 Emails dispatched!`, text: `Successfully sent to ${selected.length} lead(s).` });
             setSelected([]);
             // Refresh to update statuses
             const refresh = await loadDashboardLeadsAPI();
@@ -636,7 +694,7 @@ function ScraperPage() {
                 setLeads(refresh.data.filter(l => l.email && l.website && l.status === "unsent"));
             }
         } else {
-            setMsg(`Failed: ${res?.error || "Email blast failed."}`);
+            Toast.fire({ icon: 'error', title: 'Email blast failed', text: res?.error || 'Check your SMTP settings.' });
         }
     }
 
@@ -1534,9 +1592,6 @@ function Dashboard({ user, onLogout }) {
     const [page, setPage] = useState("home");
     const [repliesCount, setReplies] = useState(0);
 
-    // All pages stay mounted — only the active one is visible.
-    // This preserves state (scanning progress, form inputs, etc.)
-    // when the user navigates between tabs.
     return (
         <div style={{ display: "flex", minHeight: "100vh", background: "#09090B" }}>
             <Sidebar page={page} setPage={setPage} user={user} onLogout={onLogout} repliesCount={repliesCount} />
@@ -1570,6 +1625,35 @@ export default function App() {
             setUser({ name: localStorage.getItem("userName") || "", email: localStorage.getItem("userEmail") || "" });
             setView("dashboard");
         }
+    }, []);
+
+    // ── Global Session Eviction Listener ──────────────────────────
+    // api.js fires this custom event whenever the server returns SESSION_EVICTED.
+    // This is the single place in the UI responsible for the lockout popup.
+    useEffect(() => {
+        const handleEviction = () => {
+            // Clear all remaining credentials
+            ["userSessionToken", "userName", "userEmail"].forEach(k => localStorage.removeItem(k));
+
+            Swal.fire({
+                title: '🔐 Session Ended',
+                html: 'Your account was just logged into from <strong>another device or browser</strong>.<br/><br/>You have been securely signed out.',
+                icon: 'warning',
+                confirmButtonText: 'Sign In Again',
+                confirmButtonColor: '#0057FF',
+                background: '#111113',
+                color: '#e5e5e7',
+                allowOutsideClick: false,
+                allowEscapeKey: false,
+            }).then(() => {
+                setUser(null);
+                setView("landing");
+                setModal("login");
+            });
+        };
+
+        window.addEventListener('session-evicted', handleEviction);
+        return () => window.removeEventListener('session-evicted', handleEviction);
     }, []);
 
     function handleAuth(userData) {
