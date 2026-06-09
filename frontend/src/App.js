@@ -786,7 +786,7 @@ function ScraperPage() {
                     {msg}
                 </div>
             )}
-            {error && <div style={{ background: "#FF444418", border: "1px solid #FF444430", borderRadius: 10, padding: "12px 18px", marginBottom: 16, color: "#FF6666", fontSize: 14 }}>{error}</div>}
+            {error && error !== 'SESSION_EVICTED' && <div style={{ background: "#FF444418", border: "1px solid #FF444430", borderRadius: 10, padding: "12px 18px", marginBottom: 16, color: "#FF6666", fontSize: 14 }}>{error}</div>}
 
             {!scanning && leads.length > 0 && (
                 <>
@@ -1082,7 +1082,7 @@ function EmailsPage({ isActive }) {
             )}
 
             {loading && <div style={{ color: "#555", fontSize: 14, textAlign: "center", padding: "60px" }}>Loading emails…</div>}
-            {error   && <div style={{ background: "#FF444418", border: "1px solid #FF444430", borderRadius: 10, padding: "14px 18px", color: "#FF6666", fontSize: 14 }}>{error}</div>}
+            {error && error !== 'SESSION_EVICTED' && <div style={{ background: "#FF444418", border: "1px solid #FF444430", borderRadius: 10, padding: "14px 18px", color: "#FF6666", fontSize: 14 }}>{error}</div>}
 
             {!loading && emails.length > 0 && (
                 <div style={{ background: "#0f0f12", border: "1px solid #ffffff0d", borderRadius: 14, overflowX: "auto" }}>
