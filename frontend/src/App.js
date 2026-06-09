@@ -10,7 +10,8 @@ import {
     handleGoogleAuthAPI,
     cancelLeadScraperAPI,
     handleForgotPasswordAPI,
-    handleResetPasswordAPI
+    handleResetPasswordAPI,
+    heartbeatAPI
 } from "./api";
 import { loadRepliesAPI } from "./api";
 import { useGoogleLogin } from '@react-oauth/google';
@@ -953,7 +954,11 @@ function EmailsPage({ isActive }) {
             loadCampaignOutboxAPI().then(res => {
                 setLoading(false);
                 if (res?.success && Array.isArray(res.data)) setEmails(res.data);
-                else if (res?.error) setError(res.error);
+                else if (res?.error && res.error !== 'SESSION_EVICTED') {
+                    // Suppress SESSION_EVICTED — the global event listener in App
+                    // already shows the SweetAlert2 popup for that case.
+                    setError(res.error);
+                }
             }).catch(() => { setLoading(false); setError("Could not load emails."); });
         }
     }, [isActive]);
@@ -1243,7 +1248,9 @@ function RepliesPage({ onCountUpdate }) {
             if (data.success && Array.isArray(data.data)) {
                 setReplies(data.data);
                 if (onCountUpdate) onCountUpdate(data.data.length);
-            } else {
+            } else if (data.error !== 'SESSION_EVICTED') {
+                // Suppress SESSION_EVICTED — the global App event listener
+                // already shows the SweetAlert2 popup for that case.
                 setError(data.error || "Failed to load replies.");
             }
         } catch {
@@ -1632,7 +1639,6 @@ export default function App() {
     // This is the single place in the UI responsible for the lockout popup.
     useEffect(() => {
         const handleEviction = () => {
-            // Clear all remaining credentials
             ["userSessionToken", "userName", "userEmail"].forEach(k => localStorage.removeItem(k));
 
             Swal.fire({
@@ -1655,6 +1661,83 @@ export default function App() {
         window.addEventListener('session-evicted', handleEviction);
         return () => window.removeEventListener('session-evicted', handleEviction);
     }, []);
+
+    // ── Persistent SSE connection for instant session eviction ─────────
+    // Opens GET /api/auth/events as a long-lived stream. The moment someone
+    // else logs in, evictUser() pushes SESSION_EVICTED here — millisecond popup.
+    useEffect(() => {
+        if (!user) return;
+
+        const token = localStorage.getItem('userSessionToken');
+        if (!token) return;
+
+        const SSE_URL = API + '/auth/events';
+        let abortCtrl = new AbortController();
+        let retryTimeout = null;
+
+        async function connectSSE() {
+            try {
+                const response = await fetch(SSE_URL, {
+                    headers: { 'Authorization': `Bearer ${token}` },
+                    signal: abortCtrl.signal,
+                });
+
+                if (!response.ok || !response.body) return;
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                // ⚠️ MUST be outside the while loop — on Azure, TCP packets can be
+                // fragmented so 'event:' and 'data:' lines may arrive in separate
+                // chunks. Resetting inside the loop would wipe the event type.
+                let eventType = 'message';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (line.startsWith('event:')) {
+                            eventType = line.slice(6).trim();
+                        } else if (line.startsWith('data:') || line === '') {
+                            if (eventType === 'SESSION_EVICTED') {
+                                window.dispatchEvent(new CustomEvent('session-evicted'));
+                                return;
+                            }
+                            eventType = 'message';
+                        }
+                    }
+                }
+
+                if (!abortCtrl.signal.aborted) {
+                    retryTimeout = setTimeout(connectSSE, 3000);
+                }
+            } catch (err) {
+                if (err.name === 'AbortError') return;
+                retryTimeout = setTimeout(connectSSE, 5000);
+            }
+        }
+
+        connectSSE();
+
+        return () => {
+            abortCtrl.abort();
+            if (retryTimeout) clearTimeout(retryTimeout);
+        };
+    }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // ── 30-second heartbeat (fallback safety net) ──────────────────
+    useEffect(() => {
+        if (!user) return;
+        heartbeatAPI();
+        const id = setInterval(heartbeatAPI, 30_000);
+        return () => clearInterval(id);
+    }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
     function handleAuth(userData) {
         setUser(userData);

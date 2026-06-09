@@ -30,6 +30,27 @@ const handleResponse = async (response) => {
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
+// SESSION HEARTBEAT
+// Called every 30 s from the root App component. If the backend replies with
+// SESSION_EVICTED, handleResponse() fires the 'session-evicted' window event
+// and the SweetAlert2 popup appears — regardless of what page the user is on.
+// ═════════════════════════════════════════════════════════════════════════════
+export const heartbeatAPI = async () => {
+    const token = localStorage.getItem('userSessionToken');
+    if (!token) return null; // not logged in — skip
+    try {
+        const response = await fetch(`${BASE_API_URI}/auth/heartbeat`, {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        return handleResponse(response);
+    } catch {
+        // Network failure — just ignore, don't log out the user
+        return null;
+    }
+};
+
+// ═════════════════════════════════════════════════════════════════════════════
 // AUTH PIPELINES
 // ═════════════════════════════════════════════════════════════════════════════
 export const handleRegisterAPI = async (name, email, password) => {

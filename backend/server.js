@@ -12,11 +12,31 @@ const app = express();
 
 //  DYNAMIC CORS: Read origins from .env file, fallback to localhost if empty
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
-  ? process.env.ALLOWED_ORIGINS.split(',') 
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
   : ['http://localhost:3000'];
 
-app.use(cors({ origin: allowedOrigins }));
+// ── CORS ─────────────────────────────────────────────────────────────────────
+// allowedHeaders must include 'Authorization' so the SSE fetch() call
+// (which sends the JWT in an Authorization header) passes the CORS preflight.
+// exposedHeaders 'Content-Type' lets the browser read the text/event-stream.
+app.use(cors({
+  origin: allowedOrigins,
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  exposedHeaders: ['Content-Type'],
+  credentials: true,
+}));
 app.use(express.json());
+
+// ── Disable TCP Nagle buffering for SSE ──────────────────────────────────────
+// Node.js / iisnode may batch small writes via Nagle's algorithm.
+// Setting socket.setNoDelay(true) ensures every res.write() for the SSE
+// stream is flushed to the client immediately, without waiting to fill a
+// TCP packet. This is the Node-level fix; web.config flushResponse="true"
+// is the IIS-level fix — both are needed on Azure Windows App Service.
+app.use((req, res, next) => {
+  req.socket.setNoDelay(true);
+  next();
+});
 
 // Establish connection to MongoDB instance
 connectDB();

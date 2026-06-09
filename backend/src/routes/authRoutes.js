@@ -3,6 +3,8 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import User from '../models/user.js';
+import { protect } from '../middleware/auth.js';
+import { evictUser, registerSSE } from '../services/sessionRegistry.js';
 
 const router = express.Router();
 
@@ -69,6 +71,12 @@ router.post('/login', async (req, res) => {
         user.currentSessionId = sessionId;
         await user.save({ validateBeforeSave: false });
 
+        // ── Instant SSE eviction ──────────────────────────────────────────────
+        // Push SESSION_EVICTED to any browser tab that is currently open for
+        // this user. The EventSource listener on the frontend fires immediately.
+        evictUser(user._id);
+        // ─────────────────────────────────────────────────────────────────────
+
         return res.json({
             success: true,
             token: generateToken(user._id, sessionId),
@@ -110,6 +118,10 @@ router.post('/google', async (req, res) => {
         const sessionId = crypto.randomUUID();
         user.currentSessionId = sessionId;
         await user.save({ validateBeforeSave: false });
+
+        // ── Instant SSE eviction (Google login) ───────────────────────────────
+        evictUser(user._id);
+        // ─────────────────────────────────────────────────────────────────────
 
         return res.json({
             success: true,
@@ -185,6 +197,63 @@ router.post('/reset-password', async (req, res) => {
         console.error('Reset password error:', err);
         res.status(500).json({ success: false, error: 'Server error' });
     }
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// GET /api/auth/events  — Server-Sent Events stream
+// ─────────────────────────────────────────────────────────────────────────────
+// The frontend opens this as an EventSource right after login.  The connection
+// stays open (it is a long-lived HTTP response). When a new login for this
+// account is processed, evictUser() writes a SESSION_EVICTED event here and
+// closes the stream — the browser receives it within milliseconds.
+// ═════════════════════════════════════════════════════════════════════════════
+router.get('/events', protect, (req, res) => {
+    // ── SSE headers — tuned for Azure App Service / IIS / ARR ────────────────
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Transfer-Encoding', 'chunked');      // forces IIS/ARR into streaming (no buffering)
+    res.setHeader('X-Accel-Buffering', 'no');           // disables Nginx buffering (if in the chain)
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.status(200);
+    res.flushHeaders();                                 // push all headers to client immediately
+
+    // ── Initial handshake — confirms stream is live ───────────────────────────
+    res.write('event: connected\ndata: {"status":"ok"}\n\n');
+    if (typeof res.flush === 'function') res.flush();
+
+    // ── Register in the in-memory session registry ────────────────────────────
+    const cleanup = registerSSE(req.user._id, res);
+
+    // ── Keep-alive ping every 20 s ───────────────────────────────────────────
+    // Azure App Service / ARR closes idle HTTP connections after ~240 seconds.
+    // Sending a SSE comment line (:ping) every 20 s keeps the connection alive.
+    // The web.config httpRuntime executionTimeout="600" prevents IIS from
+    // closing the long-lived request before the ping can reset the ARR timer.
+    const keepAlive = setInterval(() => {
+        try {
+            res.write(':ping\n\n');
+            if (typeof res.flush === 'function') res.flush();
+        } catch {
+            clearInterval(keepAlive);
+        }
+    }, 20_000);
+
+    // ── Clean up on client disconnect ─────────────────────────────────────────
+    req.on('close', () => {
+        clearInterval(keepAlive);
+        cleanup();
+    });
+});
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// GET /api/auth/heartbeat  (kept as a fallback polling safety net)
+// ═════════════════════════════════════════════════════════════════════════════
+router.get('/heartbeat', protect, (req, res) => {
+    return res.json({ success: true, ok: true });
 });
 
 export default router;
