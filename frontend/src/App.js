@@ -189,10 +189,11 @@ function Landing({ onLogin, onRegister }) {
 // ─── AUTH MODAL ────────────────────────────────────────────────
 function AuthModal({ mode, onClose, onSuccess }) {
     const [tab, setTab] = useState(mode);
-    const [form, setForm] = useState({ name: "", email: "", password: "" });
+    const [form, setForm] = useState({ name: "", email: "", username: "", password: "" });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
     const [successMsg, setSuccessMsg] = useState("");
+    const [showPass, setShowPass] = useState(false);
 
     async function submit() {
         setError(""); setSuccessMsg(""); setLoading(true);
@@ -204,6 +205,22 @@ function AuthModal({ mode, onClose, onSuccess }) {
             else if (tab === "reset") {
                 const token = new URLSearchParams(window.location.search).get("resetToken");
                 res = await handleResetPasswordAPI(token, form.password);
+            }
+            else if (tab === "admin") {
+                const adminRes = await fetch(`${API}/settings/login`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: form.username, password: form.password })
+                });
+                const adminData = await adminRes.json();
+                if (adminData.success) {
+                    localStorage.setItem("adminToken", adminData.token);
+                    onSuccess({ role: "admin", token: adminData.token });
+                    return;
+                } else {
+                    setError(adminData.error || "Invalid admin password");
+                    setLoading(false);
+                    return;
+                }
             }
 
             if (tab === "forgot") {
@@ -263,18 +280,18 @@ function AuthModal({ mode, onClose, onSuccess }) {
             onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
             <div style={{ background: "#111113", border: "1px solid #ffffff18", borderRadius: 18, padding: "40px", width: 420, maxWidth: "90vw" }}>
                 <div style={{ display: "flex", marginBottom: 28, background: "#ffffff08", borderRadius: 10, padding: 4 }}>
-                    {(tab === "reset" ? ["reset"] : ["login", "register"]).map(t => (
+                    {(tab === "reset" ? ["reset"] : ["login", "register", "admin"]).map(t => (
                         <button key={t} onClick={() => { setTab(t); setError(""); setSuccessMsg(""); }}
                             style={{ flex: 1, padding: "10px", borderRadius: 8, border: "none", background: tab === t ? "#1e1e22" : "transparent", color: tab === t ? "#fff" : "#666", fontFamily: "'Sora',sans-serif", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>
-                            {t === "login" ? "Log In" : t === "register" ? "Register" : "Reset Password"}
+                            {t === "login" ? "User Log In" : t === "register" ? "Register" : t === "admin" ? "Admin" : "Reset Password"}
                         </button>
                     ))}
                 </div>
                 <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 6, color: "#fff" }}>
-                    {tab === "login" ? "Welcome back 👋" : tab === "register" ? "Create account 🚀" : tab === "forgot" ? "Reset Password" : "New Password"}
+                    {tab === "login" ? "Welcome back 👋" : tab === "register" ? "Create account 🚀" : tab === "forgot" ? "Reset Password" : tab === "admin" ? "Admin Login ⚙️" : "New Password"}
                 </h2>
                 <p style={{ color: "#71717a", fontSize: 14, marginBottom: 28 }}>
-                    {tab === "login" ? "Sign in to your dashboard" : tab === "register" ? "Start finding leads today" : tab === "forgot" ? "Enter your email to receive a reset link" : "Enter your new password below"}
+                    {tab === "login" ? "Sign in to your dashboard" : tab === "register" ? "Start finding leads today" : tab === "forgot" ? "Enter your email to receive a reset link" : tab === "admin" ? "Sign in to manage global settings" : "Enter your new password below"}
                 </p>
 
                 {tab === "register" && (
@@ -283,7 +300,13 @@ function AuthModal({ mode, onClose, onSuccess }) {
                         <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="" autoComplete="name" style={inp} />
                     </div>
                 )}
-                {tab !== "reset" && (
+                {tab === "admin" && (
+                    <div style={{ marginBottom: 16 }}>
+                        <label style={{ display: "block", fontSize: 13, color: "#a1a1aa", marginBottom: 6, fontWeight: 600 }}>Admin Username</label>
+                        <input value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} placeholder="admin" style={inp} />
+                    </div>
+                )}
+                {tab !== "reset" && tab !== "admin" && (
                     <div style={{ marginBottom: 16 }}>
                         <label style={{ display: "block", fontSize: 13, color: "#a1a1aa", marginBottom: 6, fontWeight: 600 }}>Email</label>
                         <input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} type="email" placeholder="" autoComplete="email" style={inp} />
@@ -297,17 +320,22 @@ function AuthModal({ mode, onClose, onSuccess }) {
                                 <span onClick={() => { setTab("forgot"); setError(""); }} style={{ fontSize: 12, color: "#00C896", cursor: "pointer" }}>Forgot?</span>
                             )}
                         </div>
-                        <input value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} type="password" placeholder="" autoComplete="new-password"
-                            onKeyDown={e => e.key === "Enter" && submit()} style={inp} />
+                        <div style={{ position: "relative" }}>
+                            <input value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} type={showPass ? "text" : "password"} placeholder="" autoComplete="new-password"
+                                onKeyDown={e => e.key === "Enter" && submit()} style={{ ...inp, marginBottom: 0, paddingRight: 40 }} />
+                            <button onClick={() => setShowPass(!showPass)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "transparent", border: "none", color: "#a1a1aa", cursor: "pointer", fontSize: 16 }}>
+                                {showPass ? "👁️" : "🙈"}
+                            </button>
+                        </div>
                     </div>
                 )}
                 {error && <div style={{ background: "#FF444418", border: "1px solid #FF444430", borderRadius: 8, padding: "10px 14px", color: "#FF6666", fontSize: 13, marginBottom: 16 }}>{error}</div>}
                 {successMsg && <div style={{ background: "#00C89618", border: "1px solid #00C89630", borderRadius: 8, padding: "10px 14px", color: "#00C896", fontSize: 13, marginBottom: 16 }}>{successMsg}</div>}
                 <button onClick={submit} disabled={loading}
-                    style={{ width: "100%", padding: "14px", borderRadius: 10, border: "none", background: "linear-gradient(135deg,#00C896,#0057FF)", color: "#fff", fontFamily: "'Sora',sans-serif", fontWeight: 700, fontSize: 15, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? .7 : 1, marginBottom: 12 }}>
-                    {loading ? "Please wait…" : tab === "login" ? "Sign In →" : tab === "register" ? "Create Account →" : tab === "forgot" ? "Send Reset Link" : "Reset Password"}
+                    style={{ width: "100%", padding: "14px", borderRadius: 10, border: "none", background: tab === "admin" ? "linear-gradient(135deg,#FF0055,#FF5500)" : "linear-gradient(135deg,#00C896,#0057FF)", color: "#fff", fontFamily: "'Sora',sans-serif", fontWeight: 700, fontSize: 15, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? .7 : 1, marginBottom: 12 }}>
+                    {loading ? "Please wait…" : tab === "login" ? "Sign In →" : tab === "register" ? "Create Account →" : tab === "forgot" ? "Send Reset Link" : tab === "admin" ? "Unlock Admin Panel →" : "Reset Password"}
                 </button>
-                {tab !== "forgot" && tab !== "reset" && (
+                {tab !== "forgot" && tab !== "reset" && tab !== "admin" && (
                     <button onClick={() => googleLogin()}
                         style={{ width: "100%", padding: "14px", borderRadius: 10, border: "1px solid #ffffff25", background: "#ffffff0a", color: "#fff", fontFamily: "'Sora',sans-serif", fontWeight: 600, fontSize: 14, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, transition: "background .2s" }}>
                         <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#fff" d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 15.907 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z"/></svg>
@@ -1153,7 +1181,16 @@ function EmailRow({ e }) {
                 <td style={{ padding: "14px 16px", color: "#555", whiteSpace: "nowrap" }}>
                     {e.sentAt ? new Date(e.sentAt).toLocaleString() : "—"}
                 </td>
-                <td style={{ padding: "14px 16px" }}><Badge status={e.status} /></td>
+                <td style={{ padding: "14px 16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <Badge status={e.status} />
+                        {e.status === 'failed' && e.errorReason && (
+                            <span style={{ fontSize: 11, color: "#FF6666", maxWidth: 180, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", background: "#FF444410", padding: "2px 6px", borderRadius: 4 }} title={e.errorReason}>
+                                {e.errorReason}
+                            </span>
+                        )}
+                    </div>
+                </td>
                 <td style={{ padding: "14px 16px" }}>
                     {hasReply ? (
                         <button
@@ -1610,6 +1647,231 @@ function ProfilePage({ user }) {
     );
 }
 
+// ─── ADMIN PAGE ─────────────────────────────────────────────
+function AdminPage() {
+    const adminToken = localStorage.getItem("adminToken");
+    const [settings, setSettings] = useState({ adminUsername: "", smtpUser: "", smtpPass: "", smtpHost: "", smtpPort: "", adminPassword: "", maxLeadsPerRun: 500, emailDelaySeconds: 1.5 });
+    const [users, setUsers] = useState([]);
+    const [activeTab, setActiveTab] = useState("settings");
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState("");
+    const [showPass, setShowPass] = useState(false);
+
+    useEffect(() => {
+        if (adminToken) {
+            fetchSettings();
+            fetchUsers();
+        }
+    }, [adminToken]);
+
+    async function fetchUsers() {
+        try {
+            const res = await fetch(`${API}/settings/users`, {
+                headers: { 'Authorization': `Bearer ${adminToken}` }
+            });
+            const data = await res.json();
+            if (data.success) setUsers(data.data);
+        } catch (e) { console.error(e); }
+    }
+
+    async function deleteUser(userId) {
+        if (!window.confirm("Are you sure you want to completely delete this user and all their leads? This cannot be undone.")) return;
+        try {
+            const res = await fetch(`${API}/settings/users/${userId}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${adminToken}` }
+            });
+            const data = await res.json();
+            if (data.success) {
+                Swal.fire({ title: 'Deleted!', text: 'User and all their data removed.', icon: 'success', background: '#1a1a1f', color: '#fff', confirmButtonColor: '#00C896' });
+                fetchUsers();
+            } else {
+                Swal.fire({ title: 'Error', text: data.error, icon: 'error', background: '#1a1a1f', color: '#fff' });
+            }
+        } catch (e) {}
+    }
+
+    async function fetchSettings() {
+        try {
+            const res = await fetch(`${API}/settings`, {
+                headers: { 'Authorization': `Bearer ${adminToken}` }
+            });
+            const data = await res.json();
+            if (data.success) setSettings(data.data);
+        } catch (e) { console.error(e); }
+    }
+
+    async function saveSettings() {
+        setLoading(true); setError("");
+        try {
+            const res = await fetch(`${API}/settings`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
+                body: JSON.stringify(settings)
+            });
+            const data = await res.json();
+            if (data.success) {
+                Swal.fire({ title: 'Saved!', text: 'Settings updated successfully.', icon: 'success', background: '#1a1a1f', color: '#fff', confirmButtonColor: '#00C896' });
+            } else { setError(data.error); }
+        } catch (e) { setError("Failed to save"); }
+        setLoading(false);
+    }
+
+    const inp = { width: "100%", padding: "12px 14px", borderRadius: 9, border: "1px solid #ffffff15", background: "#141417", color: "#fff", fontFamily: "'Sora',sans-serif", fontSize: 14, boxSizing: "border-box", outline: "none", marginBottom: 20 };
+
+    function showAppPasswordInfo() {
+        Swal.fire({
+            title: 'How to get an App Password',
+            html: `
+                <div style="text-align: left; font-size: 14px; color: #d4d4d8; line-height: 1.6;">
+                    <ol style="padding-left: 20px; margin: 0;">
+                        <li style="margin-bottom: 6px;">Log into the new Gmail account and go to <strong>Manage your Google Account</strong>.</li>
+                        <li style="margin-bottom: 6px;">Go to the <strong>Security</strong> tab on the left.</li>
+                        <li style="margin-bottom: 6px;">Make sure <strong>2-Step Verification is turned ON</strong>.</li>
+                        <li style="margin-bottom: 6px;">Once it is ON, use the search bar at the top of the settings to search for <strong>"App Passwords"</strong>.</li>
+                        <li style="margin-bottom: 6px;">Create a new App Password (name it "LeadForge" or something similar).</li>
+                        <li style="margin-bottom: 6px;">Google will show a <strong>16-letter password</strong> in a yellow box (like <code>abcd efgh ijkl mnop</code>).</li>
+                        <li>Copy that password and paste it into our Admin Panel!</li>
+                    </ol>
+                </div>
+            `,
+            icon: 'info',
+            background: '#1a1a1f',
+            color: '#fff',
+            confirmButtonColor: '#00C896',
+            width: 500
+        });
+    }
+
+    function logoutAdmin() {
+        localStorage.removeItem("adminToken");
+        window.location.reload();
+    }
+
+    return (
+        <div style={{ minHeight: "100vh", background: "#09090B", padding: "60px 40px", fontFamily: "'Sora',sans-serif", color: "#fff" }}>
+            <div style={{ maxWidth: 680, margin: "0 auto" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+                    <div>
+                        <h1 style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-.02em", marginBottom: 6 }}>Admin Panel</h1>
+                        <p style={{ color: "#71717a", fontSize: 14, margin: 0 }}>Configure global system settings.</p>
+                    </div>
+                    <button onClick={logoutAdmin} style={{ padding: "10px 20px", borderRadius: 9, border: "1px solid #ffffff15", background: "transparent", color: "#a1a1aa", fontFamily: "'Sora',sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Exit Admin</button>
+                </div>
+
+                <div style={{ display: "flex", gap: 12, marginBottom: 24 }}>
+                    <button onClick={() => setActiveTab("settings")} style={{ padding: "10px 20px", borderRadius: 9, border: "none", background: activeTab === "settings" ? "linear-gradient(135deg,#00C896,#0057FF)" : "#ffffff0a", color: activeTab === "settings" ? "#fff" : "#a1a1aa", fontFamily: "'Sora',sans-serif", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>Global Settings</button>
+                    <button onClick={() => setActiveTab("users")} style={{ padding: "10px 20px", borderRadius: 9, border: "none", background: activeTab === "users" ? "linear-gradient(135deg,#00C896,#0057FF)" : "#ffffff0a", color: activeTab === "users" ? "#fff" : "#a1a1aa", fontFamily: "'Sora',sans-serif", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>User Management</button>
+                </div>
+
+                {activeTab === "settings" && (
+                    <div style={{ background: "#0f0f12", border: "1px solid #ffffff0d", borderRadius: 16, padding: "32px", marginBottom: 20 }}>
+                <h3 style={{ fontWeight: 700, fontSize: 18, marginBottom: 20 }}>📧 Global Email Sender (SMTP & IMAP)</h3>
+                <label style={{ display: "block", fontSize: 13, color: "#a1a1aa", marginBottom: 6, fontWeight: 600 }}>Email Address</label>
+                <input value={settings.smtpUser} onChange={e=>setSettings({...settings, smtpUser: e.target.value})} placeholder="you@gmail.com" style={inp} />
+                
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#a1a1aa", marginBottom: 6, fontWeight: 600 }}>
+                    App Password
+                    <span onClick={showAppPasswordInfo} title="How to get an App Password" style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%", background: "#ffffff20", color: "#fff", fontSize: 11, fontWeight: "bold" }}>i</span>
+                </label>
+                <div style={{ position: "relative", marginBottom: 20 }}>
+                    <input value={settings.smtpPass} onChange={e=>setSettings({...settings, smtpPass: e.target.value})} type={showPass ? "text" : "password"} placeholder="xxxx xxxx xxxx xxxx" style={{...inp, marginBottom: 0, paddingRight: 40}} />
+                    <button onClick={() => setShowPass(!showPass)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "transparent", border: "none", color: "#a1a1aa", cursor: "pointer", fontSize: 16 }}>
+                        {showPass ? "👁️" : "🙈"}
+                    </button>
+                </div>
+
+                <div style={{ display: "flex", gap: 20 }}>
+                    <div style={{ flex: 1 }}>
+                        <label style={{ display: "block", fontSize: 13, color: "#a1a1aa", marginBottom: 6, fontWeight: 600 }}>SMTP Host</label>
+                        <input value={settings.smtpHost} onChange={e=>setSettings({...settings, smtpHost: e.target.value})} placeholder="smtp.gmail.com" style={inp} />
+                    </div>
+                    <div style={{ width: 120 }}>
+                        <label style={{ display: "block", fontSize: 13, color: "#a1a1aa", marginBottom: 6, fontWeight: 600 }}>Port</label>
+                        <input value={settings.smtpPort} onChange={e=>setSettings({...settings, smtpPort: e.target.value})} type="number" placeholder="465" style={inp} />
+                    </div>
+                </div>
+
+                <hr style={{ border: 0, borderTop: "1px solid #ffffff10", margin: "20px 0" }} />
+                <h3 style={{ fontWeight: 700, fontSize: 18, marginBottom: 20 }}>⚙️ Scraper & Email Configuration</h3>
+                
+                <div style={{ display: "flex", gap: 20, marginBottom: 20 }}>
+                    <div style={{ flex: 1 }}>
+                        <label style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#a1a1aa", marginBottom: 6, fontWeight: 600 }}>
+                            <span>Max Leads per Run</span>
+                            <span style={{ color: "#00C896" }}>{settings.maxLeadsPerRun} Leads</span>
+                        </label>
+                        <input type="range" min="10" max="2000" step="10" value={settings.maxLeadsPerRun || 500} onChange={e=>setSettings({...settings, maxLeadsPerRun: parseInt(e.target.value)})} style={{ width: "100%", accentColor: "#00C896", cursor: "pointer" }} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <label style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#a1a1aa", marginBottom: 6, fontWeight: 600 }}>
+                            <span>Email Sending Delay</span>
+                            <span style={{ color: "#0057FF" }}>{settings.emailDelaySeconds} Seconds</span>
+                        </label>
+                        <input type="range" min="0.5" max="10" step="0.5" value={settings.emailDelaySeconds || 1.5} onChange={e=>setSettings({...settings, emailDelaySeconds: parseFloat(e.target.value)})} style={{ width: "100%", accentColor: "#0057FF", cursor: "pointer" }} />
+                    </div>
+                </div>
+
+                <hr style={{ border: 0, borderTop: "1px solid #ffffff10", margin: "20px 0" }} />
+                <h3 style={{ fontWeight: 700, fontSize: 18, marginBottom: 20 }}>🔒 Security</h3>
+                <label style={{ display: "block", fontSize: 13, color: "#a1a1aa", marginBottom: 6, fontWeight: 600 }}>Admin Username</label>
+                <input value={settings.adminUsername} onChange={e=>setSettings({...settings, adminUsername: e.target.value})} placeholder="admin" style={inp} />
+                
+                <label style={{ display: "block", fontSize: 13, color: "#a1a1aa", marginBottom: 6, fontWeight: 600 }}>Change Admin Password</label>
+                <div style={{ position: "relative", marginBottom: 20 }}>
+                    <input value={settings.adminPassword} onChange={e=>setSettings({...settings, adminPassword: e.target.value})} type={showPass ? "text" : "password"} placeholder="New Admin Password" style={{...inp, marginBottom: 0, paddingRight: 40}} />
+                    <button onClick={() => setShowPass(!showPass)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "transparent", border: "none", color: "#a1a1aa", cursor: "pointer", fontSize: 16 }}>
+                        {showPass ? "👁️" : "🙈"}
+                    </button>
+                </div>
+
+                {error && <div style={{ color: "#FF4444", fontSize: 13, marginBottom: 16 }}>{error}</div>}
+                
+                <button onClick={saveSettings} disabled={loading} style={{ padding: "13px 28px", borderRadius: 10, border: "none", background: "linear-gradient(135deg,#00C896,#0057FF)", color: "#fff", fontFamily: "'Sora',sans-serif", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
+                    {loading ? "Saving..." : "Save Global Settings"}
+                </button>
+                </div>
+                )}
+
+                {activeTab === "users" && (
+                    <div style={{ background: "#0f0f12", border: "1px solid #ffffff0d", borderRadius: 16, padding: "32px", marginBottom: 20 }}>
+                        <h3 style={{ fontWeight: 700, fontSize: 18, marginBottom: 20 }}>👥 Registered Users</h3>
+                        <div style={{ overflowX: "auto" }}>
+                            <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 14 }}>
+                                <thead>
+                                    <tr style={{ borderBottom: "1px solid #ffffff10", color: "#a1a1aa" }}>
+                                        <th style={{ padding: "12px 10px", fontWeight: 600 }}>Name</th>
+                                        <th style={{ padding: "12px 10px", fontWeight: 600 }}>Email</th>
+                                        <th style={{ padding: "12px 10px", fontWeight: 600 }}>Total Leads</th>
+                                        <th style={{ padding: "12px 10px", fontWeight: 600 }}>Emails Sent</th>
+                                        <th style={{ padding: "12px 10px", fontWeight: 600, textAlign: "right" }}>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {users.map(u => (
+                                        <tr key={u._id} style={{ borderBottom: "1px solid #ffffff08" }}>
+                                            <td style={{ padding: "16px 10px", color: "#fff", fontWeight: 600 }}>{u.name}</td>
+                                            <td style={{ padding: "16px 10px", color: "#d4d4d8" }}>{u.email}</td>
+                                            <td style={{ padding: "16px 10px", color: "#00C896", fontWeight: 700 }}>{u.totalLeads}</td>
+                                            <td style={{ padding: "16px 10px", color: "#0057FF", fontWeight: 700 }}>{u.emailsSent}</td>
+                                            <td style={{ padding: "16px 10px", textAlign: "right" }}>
+                                                <button onClick={() => deleteUser(u._id)} style={{ background: "transparent", border: "1px solid #FF444440", color: "#FF4444", borderRadius: 6, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>Ban & Delete</button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {users.length === 0 && (
+                                        <tr><td colSpan="5" style={{ padding: "20px", textAlign: "center", color: "#71717a" }}>No users registered yet.</td></tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
 // ─── DASHBOARD SHELL ───────────────────────────────────────────
 function Dashboard({ user, onLogout }) {
     const [page, setPage] = useState("home");
@@ -1647,6 +1909,8 @@ export default function App() {
         if (token) {
             setUser({ name: localStorage.getItem("userName") || "", email: localStorage.getItem("userEmail") || "" });
             setView("dashboard");
+        } else if (localStorage.getItem("adminToken")) {
+            setView("admin");
         }
     }, []);
 
@@ -1756,6 +2020,11 @@ export default function App() {
     }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
     function handleAuth(userData) {
+        if (userData.role === "admin") {
+            setView("admin");
+            setModal(null);
+            return;
+        }
         setUser(userData);
         if (userData.name) localStorage.setItem("userName", userData.name);
         if (userData.email) localStorage.setItem("userEmail", userData.email);
@@ -1764,7 +2033,7 @@ export default function App() {
     }
 
     function handleLogout() {
-        ["userSessionToken", "userName", "userEmail"].forEach(k => localStorage.removeItem(k));
+        ["userSessionToken", "userName", "userEmail", "adminToken"].forEach(k => localStorage.removeItem(k));
         setUser(null);
         setView("landing");
     }
@@ -1774,6 +2043,7 @@ export default function App() {
             <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&display=swap" rel="stylesheet" />
             {view === "landing" && <Landing onLogin={() => setModal("login")} onRegister={() => setModal("register")} />}
             {view === "dashboard" && <Dashboard user={user} onLogout={handleLogout} />}
+            {view === "admin" && <AdminPage />}
             {modal && <AuthModal mode={modal} onClose={() => setModal(null)} onSuccess={handleAuth} />}
         </>
     );

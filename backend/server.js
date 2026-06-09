@@ -4,6 +4,7 @@ import dotenv  from 'dotenv';
 import connectDB from './src/config/db.js';
 import authRoutes from './src/routes/authRoutes.js';
 import leadRoutes, { checkRepliesViaImap } from './src/routes/leadRoutes.js';
+import settingsRoutes from './src/routes/settingsRoutes.js';
 import Lead from './src/models/Lead.js';
 
 dotenv.config();
@@ -44,6 +45,7 @@ connectDB();
 // Core Route Mount Engine Points
 app.use('/api/auth', authRoutes);
 app.use('/api/leads', leadRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // ═══════════════════════════════════════════════════════════════
 // AUTO REPLY CHECK SCHEDULER

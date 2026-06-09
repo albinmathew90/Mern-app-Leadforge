@@ -16,6 +16,7 @@ const leadSchema = new mongoose.Schema(
         sentSubject: String,
         sentBody: String,
         sentAt: Date,
+        errorReason: String,
 
         // ── reply tracking ──────────────────────────────────────────
         repliedAt: Date,

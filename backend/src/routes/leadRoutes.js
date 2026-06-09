@@ -14,6 +14,7 @@ import nodemailer from 'nodemailer';
 import Lead from '../models/Lead.js';
 import jwt from 'jsonwebtoken';
 import { protect } from '../middleware/auth.js';
+import { getGlobalSettings } from './settingsRoutes.js';
 
 const router = express.Router();
 
@@ -230,6 +231,8 @@ async function makeStealthPage(browser, blockResources = true) {
 // GOOGLE MAPS SCRAPING
 // ═══════════════════════════════════════════════════════════════
 async function scrapeMapCards(keyword, city, cancelToken = { cancelled: false }, sessionId = null, browserRegistry = null) {
+    const settings = await getGlobalSettings();
+    const maxLeads = settings.maxLeadsPerRun || 500;
     const browser = await launchBrowser();
 
     // ── Fix 1: Register the Maps browser so cancel can force-close it ─────
@@ -277,13 +280,13 @@ async function scrapeMapCards(keyword, city, cancelToken = { cancelled: false },
 
                 if (!feedFound) continue;
 
-                await aggressiveScroll(page, allCards, keyword, cancelToken, sessionId);
+                await aggressiveScroll(page, allCards, keyword, cancelToken, sessionId, maxLeads);
 
             } catch (err) {
                 console.log(`[maps] Query failed "${queryText}": ${err.message}`);
             }
 
-            if (allCards.size >= 100) break;
+            if (allCards.size >= maxLeads) break;
             await jitter(2000, 3000);
         }
 
@@ -309,11 +312,11 @@ async function scrapeMapCards(keyword, city, cancelToken = { cancelled: false },
     }
 }
 
-async function aggressiveScroll(page, allCards, keyword, cancelToken, sessionId = null) {
+async function aggressiveScroll(page, allCards, keyword, cancelToken, sessionId = null, maxLeads = 500) {
     let staleRounds = 0;
     let lastCount = 0;
     let totalScrolls = 0;
-    const MAX_SCROLLS = 50;
+    const MAX_SCROLLS = Math.max(50, Math.ceil(maxLeads / 5));
     const MAX_STALE = 8;
 
     while (staleRounds < MAX_STALE && totalScrolls < MAX_SCROLLS) {
@@ -838,11 +841,16 @@ async function checkRepliesViaImap(userId) {
     console.log(`[IMAP] Checking replies for ${sentLeads.length} sent emails`);
     console.log(`[IMAP] Message IDs to match:`, [...messageIdMap.keys()].slice(0, 3));
 
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
+        const settings = await getGlobalSettings();
+        const smtpUser = settings.smtpUser || process.env.SMTP_USER;
+        const smtpPass = settings.smtpPass || process.env.SMTP_PASS;
+        const imapHost = process.env.IMAP_HOST || settings.smtpHost || process.env.SMTP_HOST || 'imap.gmail.com';
+
         const imapConfig = {
-            user: process.env.SMTP_USER,
-            password: process.env.SMTP_PASS,
-            host: process.env.IMAP_HOST || process.env.SMTP_HOST,
+            user: smtpUser,
+            password: smtpPass,
+            host: imapHost,
             port: parseInt(process.env.IMAP_PORT || '993'),
             tls: true,
             tlsOptions: { rejectUnauthorized: false },
@@ -1505,16 +1513,26 @@ router.post('/blast', protect, async (req, res) => {
         : `Hi ${lead.name},\n\nI noticed your business under ${lead.category}. Let's collaborate.\n\nBest regards`;
 
     try {
+        const settings = await getGlobalSettings();
+        const smtpUser = settings.smtpUser || process.env.SMTP_USER;
+        const smtpPass = settings.smtpPass || process.env.SMTP_PASS;
+        const smtpHost = settings.smtpHost || process.env.SMTP_HOST || 'smtp.gmail.com';
+        const smtpPort = settings.smtpPort || parseInt(process.env.SMTP_PORT || '465');
+
         const transporter = nodemailer.createTransport({
-            host: process.env.SMTP_HOST,
-            port: +process.env.SMTP_PORT,
+            host: smtpHost,
+            port: smtpPort,
             secure: true,
-            auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+            auth: { user: smtpUser, pass: smtpPass },
         });
 
-        const results = await Promise.all(leadIds.map(async id => {
+        const results = [];
+        for (const id of leadIds) {
             const lead = await Lead.findOne({ _id: id, user: req.user.id });
-            if (!lead?.email) return { id, status: 'skipped', reason: 'no email' };
+            if (!lead?.email) {
+                results.push({ id, status: 'skipped', reason: 'no email' });
+                continue;
+            }
 
             const emailSubject = getSubject(lead);
             const emailBody = getBody(lead);
@@ -1529,7 +1547,7 @@ router.post('/blast', protect, async (req, res) => {
 
             try {
                 const info = await transporter.sendMail({
-                    from: process.env.SMTP_USER,
+                    from: smtpUser,
                     to: lead.email,
                     subject: emailSubject,
                     text: emailBody,
@@ -1547,15 +1565,20 @@ router.post('/blast', protect, async (req, res) => {
                 await lead.save();
 
                 console.log(`[BLAST] ✓ Sent to ${lead.email}, server response:`, info.messageId);
-                return { id, status: 'sent', email: lead.email };
+                results.push({ id, status: 'sent', email: lead.email });
+
+                // Wait configurable delay between emails to prevent SMTP spam limits
+                const delayMs = (settings.emailDelaySeconds || 1.5) * 1000;
+                await new Promise(res => setTimeout(res, delayMs));
 
             } catch (e) {
                 console.error(`[BLAST] ✗ Failed ${lead.email}:`, e.message);
                 lead.status = 'failed';
+                lead.errorReason = e.message;
                 await lead.save();
-                return { id, status: 'failed', email: lead.email, error: e.message };
+                results.push({ id, status: 'failed', email: lead.email, error: e.message });
             }
-        }));
+        }
 
         const sent = results.filter(r => r.status === 'sent').length;
         const failed = results.filter(r => r.status === 'failed').length;
