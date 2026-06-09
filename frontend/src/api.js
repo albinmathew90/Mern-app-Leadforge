@@ -20,7 +20,7 @@ const handleResponse = async (response) => {
         // ── Global Session Eviction Handler ──────────────────────────────
         // If the middleware sent SESSION_EVICTED, clear creds and broadcast
         // the event so the UI can show the lockout popup wherever it lives.
-        if (response.status === 401 && errorCode === 'SESSION_EVICTED') {
+        if (errorCode === 'SESSION_EVICTED') {
             localStorage.removeItem('userSessionToken');
             window.dispatchEvent(new CustomEvent('session-evicted'));
         }
