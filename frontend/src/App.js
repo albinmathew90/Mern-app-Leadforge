@@ -389,7 +389,7 @@ const Toast = Swal.mixin({
 });
 
 // ── SSE Progress Bar ────────────────────────────────────────────
-function SseProgressBar({ active }) {
+function SseProgressBar({ active, onComplete }) {
     const [progress, setProgress] = useState({ percent: 0, message: "" });
 
     useEffect(() => {
@@ -403,7 +403,12 @@ function SseProgressBar({ active }) {
                 if (r.ok) {
                     const d = await r.json();
                     setProgress({ percent: d.percent || 0, message: d.message || "" });
-                    if (d.status === "idle" || d.status === "error") clearInterval(poll);
+                    if (d.status === "idle" || d.status === "error") {
+                        clearInterval(poll);
+                        if (d.status === "idle" && d.percent >= 100 && typeof onComplete === "function") {
+                            onComplete();
+                        }
+                    }
                 }
             } catch { }
         }, 900);
@@ -592,8 +597,10 @@ function ScraperPage() {
             res = await startLeadScraperAPI(keyword, city);
         } catch (networkErr) {
             // Network-level failure (connection reset, proxy timeout on Azure, etc.)
-            // The backend may have completed successfully — always try the DB re-fetch.
-            console.warn('[scan] Network error, attempting DB re-fetch:', networkErr.message);
+            // The backend is still running in the background. Do NOT exit scanning mode early.
+            // We will wait for SseProgressBar to reach 100% and trigger onComplete.
+            console.warn('[scan] Network timeout, waiting for background completion:', networkErr.message);
+            return; // Wait for onComplete
         }
 
         setScanning(false);
@@ -779,7 +786,16 @@ function ScraperPage() {
             </div>
 
             {/* Live SSE progress bar — only shown while scanning */}
-            <SseProgressBar active={scanning} />
+            <SseProgressBar active={scanning} onComplete={async () => {
+                setScanning(false);
+                try {
+                    const fresh = await loadDashboardLeadsAPI();
+                    const freshLeads = Array.isArray(fresh?.data) ? fresh.data.filter(l => l.email && l.website && l.status === "unsent") : [];
+                    setLeads(freshLeads);
+                    if (freshLeads.length === 0) setError("No new leads found. Try a different keyword or city.");
+                    else Toast.fire({ icon: 'success', title: '✅ Scan complete!', text: `${freshLeads.length} ready-to-email lead(s) found.` });
+                } catch (e) {}
+            }} />
 
             {msg && (
                 <div style={{ background: msg.startsWith("Failed") ? "#FF444418" : "#00C89618", border: `1px solid ${msg.startsWith("Failed") ? "#FF444430" : "#00C89630"}`, borderRadius: 10, padding: "12px 18px", marginBottom: 16, fontSize: 14, color: msg.startsWith("Failed") ? "#FF6666" : "#00C896" }}>
