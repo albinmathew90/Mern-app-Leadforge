@@ -845,14 +845,13 @@ async function checkRepliesViaImap(userId) {
         const settings = await getGlobalSettings();
         const smtpUser = settings.smtpUser || process.env.SMTP_USER;
         const smtpPass = settings.smtpPass || process.env.SMTP_PASS;
-        const imapHost = settings.imapHost || process.env.IMAP_HOST || settings.smtpHost || process.env.SMTP_HOST || 'imap.gmail.com';
-        const imapPort = settings.imapPort || parseInt(process.env.IMAP_PORT || '993');
+        const imapHost = process.env.IMAP_HOST || settings.smtpHost || process.env.SMTP_HOST || 'imap.gmail.com';
 
         const imapConfig = {
             user: smtpUser,
             password: smtpPass,
             host: imapHost,
-            port: imapPort,
+            port: parseInt(process.env.IMAP_PORT || '993'),
             tls: true,
             tlsOptions: { rejectUnauthorized: false },
             authTimeout: 15000,
@@ -901,7 +900,7 @@ async function checkRepliesViaImap(userId) {
                     }
 
                     // ── Bug Fix: Filter out UIDs we've already parsed ────────
-                    const newUids = uids.filter(uid => !processedImapUids.has(`${smtpUser}:${uid}`));
+                    const newUids = uids.filter(uid => !processedImapUids.has(uid));
                     
                     if (!newUids.length) {
                         console.log(`[IMAP] ${uids.length} emails found, but 0 are new since last check.`);
@@ -1352,7 +1351,7 @@ router.post('/search', protect, async (req, res) => {
         // Track email browser handle
         activeScrapeBrowsers.set(sessionId, { detailBrowser: null, emailBrowser });
 
-        const emailPool = new PagePool(emailBrowser, 2);
+        const emailPool = new PagePool(emailBrowser, 4);
         await emailPool.init();
 
         const savedLeads = [];
