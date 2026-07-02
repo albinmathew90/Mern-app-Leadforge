@@ -186,6 +186,19 @@ export const loadCampaignOutboxAPI = async () => {
     return handleResponse(response);
 };
 
+export const hideCampaignLeadsAPI = async (leadIds) => {
+    const token = localStorage.getItem('userSessionToken') || localStorage.getItem('token');
+    const response = await fetch(`${BASE_API_URI}/leads/hide`, {
+        method: 'POST',
+        headers: { 
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ leadIds })
+    });
+    return handleResponse(response);
+};
+
 // ═════════════════════════════════════════════════════════════════════════════
 // REPLIES
 // ═════════════════════════════════════════════════════════════════════════════

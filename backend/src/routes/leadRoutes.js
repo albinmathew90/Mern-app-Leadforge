@@ -910,7 +910,7 @@ async function checkRepliesViaImap(userId) {
                     }
 
                     // Add the new ones to the Set so they aren't parsed next time
-                    newUids.forEach(uid => processedImapUids.add(uid));
+                    newUids.forEach(uid => processedImapUids.add(`${smtpUser}:${uid}`));
 
                     console.log(`[IMAP] Found ${newUids.length} NEW emails to check (out of ${uids.length} total)`);
 
@@ -1038,7 +1038,8 @@ async function checkRepliesViaImap(userId) {
                             repliedAt: parsed.date || new Date(),
                             replyBody: replyBody.slice(0, 10000),
                             replyFrom: parsed.from?.text || '',
-                            replySubject: parsed.subject || ''
+                            replySubject: parsed.subject || '',
+                            hiddenFromOutbox: false
                         } 
                     }
                 );
@@ -1117,6 +1118,7 @@ async function checkRepliesViaImap(userId) {
                                                         replyBody: finalReplyBody.slice(0, 10000),
                                                         replyFrom: parsed.from?.text || '',
                                                         replySubject: parsed.subject || '',
+                                                        hiddenFromOutbox: false,
                                                     }
                                                 },
                                                 { new: true }
@@ -1611,8 +1613,23 @@ router.get('/campaigns', protect, async (req, res) => {
         const data = await Lead.find({
             user: req.user.id,
             status: { $in: ['sent', 'replied', 'failed'] },
+            hiddenFromOutbox: { $ne: true }
         }).sort({ updatedAt: -1 });
         res.json({ success: true, count: data.length, data });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/hide', protect, async (req, res) => {
+    try {
+        const { leadIds } = req.body;
+        if (!Array.isArray(leadIds) || leadIds.length === 0) {
+            return res.status(400).json({ error: 'No leads provided' });
+        }
+        await Lead.updateMany(
+            { _id: { $in: leadIds }, user: req.user.id },
+            { $set: { hiddenFromOutbox: true } }
+        );
+        res.json({ success: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

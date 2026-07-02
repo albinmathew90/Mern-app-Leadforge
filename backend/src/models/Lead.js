@@ -29,6 +29,9 @@ const leadSchema = new mongoose.Schema(
 
         // ── reply subject ───────────────────────────────────────────
         replySubject: String,
+
+        // ── outbox visibility ───────────────────────────────────────
+        hiddenFromOutbox: { type: Boolean, default: false },
     
     },
 { timestamps: true }

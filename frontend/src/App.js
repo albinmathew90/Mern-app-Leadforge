@@ -6,6 +6,7 @@ import {
     loadDashboardLeadsAPI,
     sendEmailBlastAPI,
     loadCampaignOutboxAPI,
+    hideCampaignLeadsAPI,
     generateAIEmailAPI,
     handleGoogleAuthAPI,
     cancelLeadScraperAPI,
@@ -991,10 +992,13 @@ function EmailsPage({ isActive }) {
     const [sortBy, setSortBy] = useState("date");
     const [sortDir, setSortDir] = useState("desc");
     const [statusFilter, setStatusFilter] = useState("all");
+    const [selected, setSelected] = useState(new Set());
+    const [hiding, setHiding] = useState(false);
 
     useEffect(() => {
         if (isActive) {
             setLoading(true);
+            setSelected(new Set());
             loadCampaignOutboxAPI().then(res => {
                 setLoading(false);
                 if (res?.success && Array.isArray(res.data)) setEmails(res.data);
@@ -1011,6 +1015,45 @@ function EmailsPage({ isActive }) {
     const sent    = emails.filter(e => e.status === "sent").length;
     const replied = emails.filter(e => e.status === "replied").length;
     const failed  = emails.filter(e => e.status === "failed").length;
+
+    const toggleSelect = (id) => {
+        setSelected(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    };
+
+    const toggleSelectAll = () => {
+        if (selected.size === filtered.length) {
+            setSelected(new Set());
+        } else {
+            setSelected(new Set(filtered.map(e => e._id)));
+        }
+    };
+
+    const handleHide = async () => {
+        if (selected.size === 0) return;
+        setHiding(true);
+        const res = await hideCampaignLeadsAPI(Array.from(selected));
+        setHiding(false);
+        if (res?.success) {
+            setEmails(prev => prev.filter(e => !selected.has(e._id)));
+            setSelected(new Set());
+            Swal.fire({
+                title: 'Removed!',
+                text: 'Selected emails have been removed from this view. (They will reappear if a reply is received)',
+                icon: 'success',
+                background: '#1a1a1f',
+                color: '#fff',
+                confirmButtonColor: '#00C896',
+                timer: 4000
+            });
+        } else {
+            Swal.fire('Error', res?.error || 'Could not hide emails', 'error');
+        }
+    };
 
     // ── Filter & Sort ──────────────────────────────────────────
     const q = search.toLowerCase().trim();
@@ -1101,6 +1144,17 @@ function EmailsPage({ isActive }) {
                         {filtered.length} of {emails.length}
                     </span>
 
+                    {/* Hide Button */}
+                    {selected.size > 0 && (
+                        <button
+                            onClick={handleHide}
+                            disabled={hiding}
+                            style={{ ...inp, cursor: "pointer", border: "1px solid #FF444440", color: "#FF4444", fontWeight: 700, whiteSpace: "nowrap", background: "#FF444410", marginLeft: "auto" }}
+                        >
+                            {hiding ? "Removing..." : `Remove Selected (${selected.size})`}
+                        </button>
+                    )}
+
                     {/* Export button */}
                     <button
                         onClick={() => downloadCSV(
@@ -1133,6 +1187,14 @@ function EmailsPage({ isActive }) {
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                         <thead>
                             <tr style={{ borderBottom: "1px solid #ffffff0d" }}>
+                                <th style={{ padding: "13px 16px", width: 40, textAlign: "left" }}>
+                                    <input 
+                                        type="checkbox" 
+                                        checked={filtered.length > 0 && selected.size === filtered.length}
+                                        onChange={toggleSelectAll}
+                                        style={{ accentColor: "#00C896", cursor: "pointer" }}
+                                    />
+                                </th>
                                 {["Business","Email","Subject","Sent At","Status","View Reply"].map(h => (
                                     <th key={h} style={{ padding: "13px 16px", textAlign: "left", color: "#555", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
                                 ))}
@@ -1140,9 +1202,9 @@ function EmailsPage({ isActive }) {
                         </thead>
                         <tbody>
                             {filtered.length > 0
-                                ? filtered.map(e => <EmailRow key={e._id} e={e} />)
+                                ? filtered.map(e => <EmailRow key={e._id} e={e} selected={selected.has(e._id)} onToggle={() => toggleSelect(e._id)} />)
                                 : (
-                                    <tr><td colSpan={6} style={{ textAlign: "center", padding: "40px", color: "#3f3f46", fontSize: 13 }}>
+                                    <tr><td colSpan={7} style={{ textAlign: "center", padding: "40px", color: "#3f3f46", fontSize: 13 }}>
                                         No results match your search
                                     </td></tr>
                                 )
@@ -1164,17 +1226,25 @@ function EmailsPage({ isActive }) {
 }
 
 // ─── EMAIL ROW with inline reply panel ─────────────────────────
-function EmailRow({ e }) {
+function EmailRow({ e, selected, onToggle }) {
     const [open, setOpen] = useState(false);
     const hasReply = e.status === "replied" && (e.replyBody || e.replyFrom);
 
     return (
         <>
             <tr
-                style={{ borderBottom: open ? "none" : "1px solid #ffffff06", transition: "background .15s" }}
-                onMouseOver={ev => ev.currentTarget.style.background = "#ffffff04"}
-                onMouseOut={ev => ev.currentTarget.style.background = "transparent"}
+                style={{ borderBottom: open ? "none" : "1px solid #ffffff06", transition: "background .15s", background: selected ? "#ffffff08" : "transparent" }}
+                onMouseOver={ev => ev.currentTarget.style.background = "#ffffff08"}
+                onMouseOut={ev => ev.currentTarget.style.background = selected ? "#ffffff08" : "transparent"}
             >
+                <td style={{ padding: "14px 16px" }}>
+                    <input 
+                        type="checkbox" 
+                        checked={selected}
+                        onChange={onToggle}
+                        style={{ accentColor: "#00C896", cursor: "pointer" }}
+                    />
+                </td>
                 <td style={{ padding: "14px 16px", fontWeight: 600, color: "#e5e5e7" }}>{e.name || "—"}</td>
                 <td style={{ padding: "14px 16px", color: "#71717a" }}>{e.email || "—"}</td>
                 <td style={{ padding: "14px 16px", color: "#a1a1aa" }}>{e.sentSubject || "—"}</td>
@@ -1216,7 +1286,7 @@ function EmailRow({ e }) {
 
             {hasReply && open && (
                 <tr style={{ borderBottom: "1px solid #ffffff06" }}>
-                    <td colSpan={6} style={{ padding: "0 16px 20px 16px", background: "#0a0a0d" }}>
+                    <td colSpan={7} style={{ padding: "0 16px 20px 16px", background: "#0a0a0d" }}>
                         <div style={{
                             border: "1px solid #00C89630",
                             borderRadius: 12,
@@ -1650,7 +1720,7 @@ function ProfilePage({ user }) {
 // ─── ADMIN PAGE ─────────────────────────────────────────────
 function AdminPage() {
     const adminToken = localStorage.getItem("adminToken");
-    const [settings, setSettings] = useState({ adminUsername: "", smtpUser: "", smtpPass: "", smtpHost: "", smtpPort: "", adminPassword: "", maxLeadsPerRun: 500, emailDelaySeconds: 1.5 });
+    const [settings, setSettings] = useState({ adminUsername: "", smtpUser: "", smtpPass: "", smtpHost: "", smtpPort: "", imapHost: "", imapPort: "", adminPassword: "", maxLeadsPerRun: 500, emailDelaySeconds: 1.5 });
     const [users, setUsers] = useState([]);
     const [activeTab, setActiveTab] = useState("settings");
     const [loading, setLoading] = useState(false);
@@ -1790,7 +1860,6 @@ function AdminPage() {
                         <label style={{ display: "block", fontSize: 13, color: "#a1a1aa", marginBottom: 6, fontWeight: 600 }}>Port</label>
                         <input value={settings.smtpPort} onChange={e=>setSettings({...settings, smtpPort: e.target.value})} type="number" placeholder="465" style={inp} />
                     </div>
-                </div>
                 </div>
 
                 <div style={{ display: "flex", gap: 20, marginTop: 20 }}>

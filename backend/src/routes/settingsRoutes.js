@@ -97,8 +97,8 @@ router.get('/', adminProtect, async (req, res) => {
             smtpPass: s.smtpPass,
             smtpHost: s.smtpHost,
             smtpPort: s.smtpPort,
-            imapHost: s.imapHost,
-            imapPort: s.imapPort,
+            imapHost: s.imapHost || process.env.IMAP_HOST || 'imap.gmail.com',
+            imapPort: s.imapPort || parseInt(process.env.IMAP_PORT || '993'),
             adminPassword: s.adminPassword,
             emailDelaySeconds: s.emailDelaySeconds,
             maxLeadsPerRun: s.maxLeadsPerRun
