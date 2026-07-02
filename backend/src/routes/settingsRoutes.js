@@ -17,6 +17,8 @@ export async function getGlobalSettings() {
             smtpPass: process.env.SMTP_PASS || '',
             smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com',
             smtpPort: parseInt(process.env.SMTP_PORT || '465'),
+            imapHost: process.env.IMAP_HOST || 'imap.gmail.com',
+            imapPort: parseInt(process.env.IMAP_PORT || '993'),
             adminPassword: process.env.ADMIN_PASSWORD || 'admin123',
             emailDelaySeconds: 1.5,
             maxLeadsPerRun: 500
@@ -95,6 +97,8 @@ router.get('/', adminProtect, async (req, res) => {
             smtpPass: s.smtpPass,
             smtpHost: s.smtpHost,
             smtpPort: s.smtpPort,
+            imapHost: s.imapHost,
+            imapPort: s.imapPort,
             adminPassword: s.adminPassword,
             emailDelaySeconds: s.emailDelaySeconds,
             maxLeadsPerRun: s.maxLeadsPerRun
@@ -108,13 +112,15 @@ router.get('/', adminProtect, async (req, res) => {
 router.put('/', adminProtect, async (req, res) => {
     try {
         const s = await getGlobalSettings();
-        const { adminUsername, smtpUser, smtpPass, smtpHost, smtpPort, adminPassword, emailDelaySeconds, maxLeadsPerRun } = req.body;
+        const { adminUsername, smtpUser, smtpPass, smtpHost, smtpPort, imapHost, imapPort, adminPassword, emailDelaySeconds, maxLeadsPerRun } = req.body;
         
         if (adminUsername !== undefined) s.adminUsername = adminUsername;
         if (smtpUser !== undefined) s.smtpUser = smtpUser;
         if (smtpPass !== undefined) s.smtpPass = smtpPass;
         if (smtpHost !== undefined) s.smtpHost = smtpHost;
         if (smtpPort !== undefined) s.smtpPort = smtpPort;
+        if (imapHost !== undefined) s.imapHost = imapHost;
+        if (imapPort !== undefined) s.imapPort = imapPort;
         if (adminPassword !== undefined) s.adminPassword = adminPassword;
         if (emailDelaySeconds !== undefined) s.emailDelaySeconds = emailDelaySeconds;
         if (maxLeadsPerRun !== undefined) s.maxLeadsPerRun = maxLeadsPerRun;

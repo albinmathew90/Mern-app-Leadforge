@@ -1791,6 +1791,18 @@ function AdminPage() {
                         <input value={settings.smtpPort} onChange={e=>setSettings({...settings, smtpPort: e.target.value})} type="number" placeholder="465" style={inp} />
                     </div>
                 </div>
+                </div>
+
+                <div style={{ display: "flex", gap: 20, marginTop: 20 }}>
+                    <div style={{ flex: 1 }}>
+                        <label style={{ display: "block", fontSize: 13, color: "#a1a1aa", marginBottom: 6, fontWeight: 600 }}>IMAP Host</label>
+                        <input value={settings.imapHost || ''} onChange={e=>setSettings({...settings, imapHost: e.target.value})} placeholder="imap.gmail.com" style={inp} />
+                    </div>
+                    <div style={{ width: 120 }}>
+                        <label style={{ display: "block", fontSize: 13, color: "#a1a1aa", marginBottom: 6, fontWeight: 600 }}>IMAP Port</label>
+                        <input value={settings.imapPort || ''} onChange={e=>setSettings({...settings, imapPort: e.target.value})} type="number" placeholder="993" style={inp} />
+                    </div>
+                </div>
 
                 <hr style={{ border: 0, borderTop: "1px solid #ffffff10", margin: "20px 0" }} />
                 <h3 style={{ fontWeight: 700, fontSize: 18, marginBottom: 20 }}>⚙️ Scraper & Email Configuration</h3>

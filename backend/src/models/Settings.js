@@ -7,6 +7,8 @@ const settingsSchema = new mongoose.Schema({
     smtpPass: { type: String, default: '' },
     smtpHost: { type: String, default: 'smtp.gmail.com' },
     smtpPort: { type: Number, default: 465 },
+    imapHost: { type: String, default: 'imap.gmail.com' },
+    imapPort: { type: Number, default: 993 },
     adminPassword: { type: String, default: 'admin123' },
     emailDelaySeconds: { type: Number, default: 1.5 },
     maxLeadsPerRun: { type: Number, default: 500 }
