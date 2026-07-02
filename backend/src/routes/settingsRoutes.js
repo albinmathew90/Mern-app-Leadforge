@@ -1,6 +1,6 @@
 import express from 'express';
 import Settings from '../models/Settings.js';
-import User from '../models/User.js';
+import User from '../models/user.js';
 import Lead from '../models/Lead.js';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
@@ -129,7 +129,7 @@ router.put('/', adminProtect, async (req, res) => {
 // Get all users and their stats
 router.get('/users', adminProtect, async (req, res) => {
     try {
-        const users = await User.find({}).select('-password -resetPasswordToken -resetPasswordExpire').lean();
+        const users = await User.find({ email: { $ne: 'admin@leadforge.com' } }).select('-password -resetPasswordToken -resetPasswordExpire').lean();
         
         // Fetch stats for each user
         const usersWithStats = await Promise.all(users.map(async (u) => {

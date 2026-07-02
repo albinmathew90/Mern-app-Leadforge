@@ -1351,7 +1351,7 @@ router.post('/search', protect, async (req, res) => {
         // Track email browser handle
         activeScrapeBrowsers.set(sessionId, { detailBrowser: null, emailBrowser });
 
-        const emailPool = new PagePool(emailBrowser, 2);
+        const emailPool = new PagePool(emailBrowser, 4);
         await emailPool.init();
 
         const savedLeads = [];

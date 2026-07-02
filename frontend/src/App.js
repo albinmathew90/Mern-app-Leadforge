@@ -19,7 +19,7 @@ import Swal from 'sweetalert2';
 
 const ACCENT = "#00C896";
 const ACCENT2 = "#0057FF";
-const API = process.env.REACT_APP_API_URL || "http://127.0.0.1:5001/api";
+const API = process.env.REACT_APP_API_URL || "http://4.240.108.250.nip.io/api";
 
 // ─── CSV EXPORT UTILITY ────────────────────────────────────────
 function downloadCSV(rows, columns, filename) {
